@@ -294,6 +294,7 @@ def scan(
             if trash:
                 trash_messages.append(r.message)
 
+    unsub_ok = unsub_failed = 0
     if unsubscribe and unsub_messages:
         console.print(f"\n[bold]Unsubscribing from {len(unsub_messages)} message(s)...[/bold]")
         # Deduplicate by sender — only need one unsubscribe per sender
@@ -306,10 +307,13 @@ def scan(
 
         unsub_results = unsub.unsubscribe_batch(unique_unsub, dry_run=dry_run)
         _render_unsub_results(unsub_results)
+        unsub_ok = sum(1 for r in unsub_results if r.success)
+        unsub_failed = sum(1 for r in unsub_results if not r.success)
 
     # ------------------------------------------------------------------
     # 5. Move to trash
     # ------------------------------------------------------------------
+    trashed = 0
     if trash and trash_messages:
         total = len(trash_messages)
         if not dry_run:
@@ -321,11 +325,41 @@ def scan(
                     with console.status(f"Moving {total} messages to trash..."):
                         for msg in trash_messages:
                             provider.move_to_trash(msg)
+                trashed = total
                 console.print(f"[green]Moved {total} messages to trash.[/green]")
         else:
+            trashed = total
             console.print(f"\n[yellow][dry-run] Would move {total} message(s) to trash.[/yellow]")
 
-    console.print("\n[bold green]Done.[/bold green]")
+    # ------------------------------------------------------------------
+    # 6. Summary
+    # ------------------------------------------------------------------
+    skipped_senders = len(grouped) - len(approved_senders)
+    flagged_msgs = sum(len(v) for v in grouped.values())
+    approved_msgs = sum(len(grouped[a]) for a in approved_senders)
+
+    summary = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    summary.add_column(style="dim")
+    summary.add_column(justify="right", style="bold")
+
+    summary.add_row("Emails fetched",        str(len(all_results)))
+    summary.add_row("Flagged as junk",       f"[red]{len(junk_results)}[/red]")
+    summary.add_row("Clean / whitelisted",   f"[green]{len(all_results) - len(junk_results)}[/green]")
+    summary.add_row("Senders reviewed",      str(len(grouped)))
+    summary.add_row("Senders approved",      str(len(approved_senders)))
+    summary.add_row("Senders skipped",       str(skipped_senders))
+    if unsubscribe:
+        label = "Unsubscribed (dry run)" if dry_run else "Unsubscribed"
+        summary.add_row(label, f"[green]{unsub_ok}[/green]")
+        if unsub_failed:
+            summary.add_row("Unsubscribe failed", f"[red]{unsub_failed}[/red]")
+    if trash:
+        label = "Moved to trash (dry run)" if dry_run else "Moved to trash"
+        summary.add_row(label, str(trashed))
+
+    console.print()
+    console.print(Panel(summary, title="[bold]Summary[/bold]", expand=False))
+    console.print("[bold green]Done.[/bold green]")
 
 
 @app.command()
