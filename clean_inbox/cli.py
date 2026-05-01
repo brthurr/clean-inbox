@@ -440,13 +440,17 @@ def scan(
     # ------------------------------------------------------------------
     # 4. Unsubscribe
     # ------------------------------------------------------------------
+    # Only unsubscribe from senders newly approved this run — auto-approved
+    # senders were already unsubscribed in a previous run.
+    newly_approved = approved_senders - auto_approved_senders
+
     unsub_messages: list[EmailMessage] = []
     trash_messages: list[EmailMessage] = []
     delete_messages: list[EmailMessage] = []
 
     for addr in approved_senders:
         for r in grouped[addr]:
-            if r.has_unsubscribe:
+            if r.has_unsubscribe and addr in newly_approved:
                 unsub_messages.append(r.message)
             if trash:
                 trash_messages.append(r.message)
