@@ -347,7 +347,8 @@ def scan(
     provider = _build_provider(cfg)
 
     with provider:
-        with console.status(f"Fetching up to {cfg.max_messages} messages..."):
+        fetch_label = "all" if fetch_all else f"up to {cfg.max_messages}"
+        with console.status(f"Fetching {fetch_label} messages..."):
             messages = list(provider.fetch_messages(folder=cfg.folder, max_messages=cfg.max_messages))
 
         console.print(f"  Fetched [bold]{len(messages)}[/bold] messages. Analyzing...")
