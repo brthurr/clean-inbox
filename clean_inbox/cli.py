@@ -19,7 +19,7 @@ from rich.text import Text
 
 from clean_inbox import __version__
 from clean_inbox.analyzer import AnalysisResult, EmailAnalyzer
-from clean_inbox.config import AppConfig, load_config, save_whitelist_entry
+from clean_inbox.config import AppConfig, load_config, load_processed, save_processed_entry, save_whitelist_entry
 from clean_inbox.providers.base import EmailMessage, EmailProvider
 from clean_inbox.unsubscriber import UnsubscribeResult, Unsubscriber
 
@@ -381,15 +381,31 @@ def scan(
     # ------------------------------------------------------------------
     # 3. Interactive review
     # ------------------------------------------------------------------
+    processed_senders = load_processed(config_path)
     approved_senders: set[str] = set()
+    auto_approved_senders: set[str] = set()
     whitelisted_senders: set[str] = set()
 
-    if interactive:
+    # Auto-approve senders that were approved in a previous run
+    for addr in grouped:
+        if addr in processed_senders:
+            approved_senders.add(addr)
+            auto_approved_senders.add(addr)
+
+    new_senders = {addr: results for addr, results in grouped.items() if addr not in processed_senders}
+
+    if auto_approved_senders:
         console.print(
-            "\n[bold]Review each sender:[/bold] "
+            f"\n[dim]Auto-approving [bold]{len(auto_approved_senders)}[/bold] previously processed "
+            f"sender(s) — skipping review for these.[/dim]"
+        )
+
+    if interactive and new_senders:
+        console.print(
+            "\n[bold]Review new senders:[/bold] "
             "y=act on this sender  n=skip  w=whitelist + delete existing  q=quit\n"
         )
-        for addr, results in grouped.items():
+        for addr, results in new_senders.items():
             sample = results[0].message
             example_subject = sample.subject[:60] + ("…" if len(sample.subject) > 60 else "")
             has_unsub = any(r.has_unsubscribe for r in results)
@@ -405,14 +421,17 @@ def scan(
                 break
             elif choice == "y":
                 approved_senders.add(addr)
+                save_processed_entry(addr, config_path)
             elif choice == "w":
                 whitelisted_senders.add(addr)
-                approved_senders.add(addr)  # still trash existing messages
+                approved_senders.add(addr)
                 wl_file = save_whitelist_entry(addr, config_path)
                 console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
             console.print()
-    else:
-        approved_senders = set(grouped.keys())
+    elif not interactive:
+        for addr in new_senders:
+            approved_senders.add(addr)
+            save_processed_entry(addr, config_path)
 
     if not approved_senders:
         console.print("[dim]No senders approved for action. Done.[/dim]")
@@ -517,7 +536,9 @@ def scan(
     summary.add_row("Emails fetched",        str(len(all_results)))
     summary.add_row("Flagged as junk",       f"[red]{len(junk_results)}[/red]")
     summary.add_row("Clean / whitelisted",   f"[green]{len(all_results) - len(junk_results)}[/green]")
-    summary.add_row("Senders reviewed",      str(len(grouped)))
+    summary.add_row("Senders found",          str(len(grouped)))
+    summary.add_row("Auto-approved (seen before)", str(len(auto_approved_senders)))
+    summary.add_row("New senders reviewed",  str(len(new_senders)))
     summary.add_row("Senders approved",      str(len(approved_senders)))
     summary.add_row("Senders whitelisted",   str(len(whitelisted_senders)))
     summary.add_row("Senders skipped",       str(skipped_senders))

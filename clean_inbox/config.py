@@ -98,6 +98,33 @@ def save_whitelist_entry(address: str, config_path: Path | None = None) -> Path:
     return wl_path
 
 
+def _processed_path(config_path: Path | None) -> Path:
+    if config_path:
+        return config_path.parent / "clean-inbox.processed"
+    return Path("clean-inbox.processed")
+
+
+def load_processed(config_path: Path | None = None) -> set[str]:
+    """Load the set of sender addresses previously approved with 'y'."""
+    path = _processed_path(config_path)
+    if not path.exists():
+        return set()
+    return {
+        line.strip().lower()
+        for line in path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+
+
+def save_processed_entry(address: str, config_path: Path | None = None) -> None:
+    """Append a sender address to the processed file."""
+    path = _processed_path(config_path)
+    existing = load_processed(config_path)
+    if address.lower() not in existing:
+        with open(path, "a") as fh:
+            fh.write(address.lower() + "\n")
+
+
 def load_config(path: str | Path | None = None) -> tuple["AppConfig", Path | None]:
     """Load config from YAML. Returns (AppConfig, config_path)."""
     if path:
