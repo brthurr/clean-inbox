@@ -89,10 +89,12 @@ class GmailProvider(EmailProvider):
         assert self._service, "Call connect() first"
         # Map common folder names to Gmail label IDs
         label = folder.upper() if folder.upper() in ("INBOX", "SPAM", "TRASH") else folder
+        # Gmail API maxResults is capped at 500 per page; pagination handles the rest
+        page_size = min(max_messages, 500)
         results = (
             self._service.users()
             .messages()
-            .list(userId="me", labelIds=[label], maxResults=max_messages)
+            .list(userId="me", labelIds=[label], maxResults=page_size)
             .execute()
         )
         messages = results.get("messages", [])
@@ -103,7 +105,7 @@ class GmailProvider(EmailProvider):
             page = (
                 self._service.users()
                 .messages()
-                .list(userId="me", labelIds=[label], maxResults=max_messages, pageToken=next_page)
+                .list(userId="me", labelIds=[label], maxResults=page_size, pageToken=next_page)
                 .execute()
             )
             collected.extend(page.get("messages", []))
