@@ -111,8 +111,8 @@ def load_config(path: str | Path | None = None) -> tuple["AppConfig", Path | Non
             raw = yaml.safe_load(fh) or {}
 
     # Merge whitelist from YAML and from the persisted whitelist file
-    yaml_whitelist: list[str] = raw.get("whitelist", [])
-    file_whitelist = load_whitelist(config_path)
+    yaml_whitelist: list[str] = raw.get("whitelist") or []
+    file_whitelist = load_whitelist(config_path) or []
     merged_whitelist = list({*yaml_whitelist, *file_whitelist})
 
     cfg = AppConfig(
