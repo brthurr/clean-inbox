@@ -47,7 +47,8 @@ class AppConfig:
     folder: str = "INBOX"
     max_messages: int = 500
     junk_threshold: int = 30     # 0-100; messages >= this are flagged
-    whitelist: list[str] = field(default_factory=list)
+    whitelist: list[str] = field(default_factory=list)        # YAML + scan whitelist file (used by analyzer)
+    yaml_whitelist: list[str] = field(default_factory=list)   # YAML entries only
     extra_sender_domains: list[str] = field(default_factory=list)
     extra_subject_patterns: list[str] = field(default_factory=list)
     imap: IMAPConfig | None = None
@@ -63,23 +64,25 @@ _DEFAULT_CONFIG_PATHS = [
     Path.home() / ".config" / "clean-inbox" / "config.yaml",
 ]
 
-_DEFAULT_WHITELIST_PATHS = [
-    Path("clean-inbox.whitelist"),
-    Path.home() / ".config" / "clean-inbox" / "whitelist.txt",
-]
-
-
-def _whitelist_path(config_path: Path | None) -> Path:
-    """Return the whitelist file path that sits beside the active config."""
+def _whitelist_path(config_path: Path | None, command: str = "scan") -> Path:
+    filename = f"clean-inbox.{command}-whitelist"
     if config_path:
-        return config_path.parent / "clean-inbox.whitelist"
-    return _DEFAULT_WHITELIST_PATHS[0]
+        return config_path.parent / filename
+    return Path(filename)
 
 
-def load_whitelist(config_path: Path | None = None) -> list[str]:
-    """Load persisted whitelist entries (one address per line)."""
-    wl_path = _whitelist_path(config_path)
+def load_whitelist(config_path: Path | None = None, command: str = "scan") -> list[str]:
+    """Load persisted whitelist entries for the given command."""
+    wl_path = _whitelist_path(config_path, command)
+    # Migrate legacy shared file on first use
     if not wl_path.exists():
+        legacy = config_path.parent / "clean-inbox.whitelist" if config_path else Path("clean-inbox.whitelist")
+        if legacy.exists():
+            return [
+                line.strip().lower()
+                for line in legacy.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            ]
         return []
     return [
         line.strip().lower()
@@ -88,10 +91,10 @@ def load_whitelist(config_path: Path | None = None) -> list[str]:
     ]
 
 
-def save_whitelist_entry(address: str, config_path: Path | None = None) -> Path:
-    """Append a single address to the whitelist file. Returns the file path."""
-    wl_path = _whitelist_path(config_path)
-    existing = load_whitelist(config_path)
+def save_whitelist_entry(address: str, config_path: Path | None = None, command: str = "scan") -> Path:
+    """Append a single address to the command-specific whitelist file. Returns the file path."""
+    wl_path = _whitelist_path(config_path, command)
+    existing = load_whitelist(config_path, command)
     if address.lower() not in existing:
         with open(wl_path, "a") as fh:
             fh.write(address.lower() + "\n")
@@ -146,10 +149,9 @@ def load_config(path: str | Path | None = None) -> tuple["AppConfig", Path | Non
         with open(config_path) as fh:
             raw = yaml.safe_load(fh) or {}
 
-    # Merge whitelist from YAML and from the persisted whitelist file
     yaml_whitelist: list[str] = raw.get("whitelist") or []
-    file_whitelist = load_whitelist(config_path) or []
-    merged_whitelist = list({*yaml_whitelist, *file_whitelist})
+    scan_file_whitelist = load_whitelist(config_path, command="scan") or []
+    merged_whitelist = list({*yaml_whitelist, *scan_file_whitelist})
 
     cfg = AppConfig(
         provider=raw.get("provider", "imap"),
@@ -157,6 +159,7 @@ def load_config(path: str | Path | None = None) -> tuple["AppConfig", Path | Non
         max_messages=int(raw.get("max_messages", 500)),
         junk_threshold=int(raw.get("junk_threshold", 30)),
         whitelist=merged_whitelist,
+        yaml_whitelist=yaml_whitelist,
         extra_sender_domains=raw.get("extra_sender_domains", []),
         extra_subject_patterns=raw.get("extra_subject_patterns", []),
         unsubscribe_timeout=int(raw.get("unsubscribe_timeout", 15)),

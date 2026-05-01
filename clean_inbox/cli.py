@@ -19,7 +19,7 @@ from rich.text import Text
 
 from clean_inbox import __version__
 from clean_inbox.analyzer import AnalysisResult, EmailAnalyzer
-from clean_inbox.config import AppConfig, load_config, load_processed, save_processed_entry, save_whitelist_entry
+from clean_inbox.config import AppConfig, load_config, load_processed, load_whitelist, save_processed_entry, save_whitelist_entry
 from clean_inbox.providers.base import EmailMessage, EmailProvider
 from clean_inbox.unsubscriber import UnsubscribeResult, Unsubscriber
 
@@ -437,7 +437,7 @@ def scan(
             elif choice == "w":
                 whitelisted_senders.add(addr)
                 approved_senders.add(addr)
-                wl_file = save_whitelist_entry(addr, config_path)
+                wl_file = save_whitelist_entry(addr, config_path, command="scan")
                 console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
             console.print()
     elif not interactive:
@@ -780,7 +780,7 @@ def cleanup(
     console.print(f"[dim]Logging to {log_file}[/dim]")
 
     processed = set() if reprocess else load_processed(config_path, command="cleanup")
-    whitelist = set(cfg.whitelist)
+    whitelist = set(cfg.yaml_whitelist) | set(load_whitelist(config_path, command="cleanup"))
 
     # ------------------------------------------------------------------
     # 1. Fetch
@@ -858,7 +858,7 @@ def cleanup(
             save_processed_entry(addr, config_path, command="cleanup")
         elif choice == "w":
             whitelisted_now.add(addr)
-            wl_file = save_whitelist_entry(addr, config_path)
+            wl_file = save_whitelist_entry(addr, config_path, command="cleanup")
             console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
         console.print()
 
