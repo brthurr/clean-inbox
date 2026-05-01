@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Credential & token files — never commit these
+gmail_credentials.json
+gmail_token.json
+o365_token_cache.json
+clean-inbox.yaml
+clean-inbox.yml
+*.token.json
+
+# Editor
+.vscode/
+.idea/
+*.swp

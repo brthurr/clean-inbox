@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clean-inbox"
+version = "0.1.0"
+description = "Automatically identify and unsubscribe from junk/marketing emails across O365, Gmail, and IMAP"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "requests>=2.31",
+    "pyyaml>=6",
+    "beautifulsoup4>=4.12",
+    "lxml>=5",
+    # Gmail
+    "google-auth>=2",
+    "google-auth-oauthlib>=1",
+    "google-api-python-client>=2",
+    # O365 / Microsoft Graph
+    "msal>=1.28",
+    # IMAP
+    "imapclient>=3",
+]
+
+[project.scripts]
+clean-inbox = "clean_inbox.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["clean_inbox"]

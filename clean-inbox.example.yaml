@@ -1,0 +1,68 @@
+# clean-inbox configuration
+# Copy to clean-inbox.yaml and fill in your credentials.
+# Passwords can also be set via env vars: IMAP_PASSWORD, SMTP_PASSWORD
+
+# Which provider to use: "imap" | "gmail" | "o365"
+provider: imap
+
+# Mailbox folder to scan
+folder: INBOX
+
+# Maximum number of messages to fetch per run
+max_messages: 500
+
+# Junk confidence threshold (0–100).
+# Messages scoring at or above this are flagged as junk.
+# - 30  → broad catch (recommended starting point)
+# - 60  → only flag emails with explicit List-Unsubscribe headers
+# - 80  → very conservative
+junk_threshold: 30
+
+# Senders whose messages will never be flagged as junk
+whitelist:
+  # - boss@mycompany.com
+  # - friend@example.com
+
+# Additional sender domains to treat as marketing ESPs
+extra_sender_domains:
+  # - newsletters.mylocalbrand.com
+
+# Additional Python regex patterns to match marketing subjects
+extra_subject_patterns:
+  # - "(?i)\\bweekly\\s+briefing\\b"
+
+# Timeout in seconds for HTTP unsubscribe requests
+unsubscribe_timeout: 15
+
+# ── IMAP ──────────────────────────────────────────────────────────────────────
+imap:
+  host: imap.example.com
+  username: you@example.com
+  # password: secret          # or set IMAP_PASSWORD env var
+  port: 993
+  use_ssl: true
+  trash_folder: Trash         # folder name may vary; common values: Trash, Deleted Items
+
+# ── Gmail ─────────────────────────────────────────────────────────────────────
+# 1. Go to https://console.cloud.google.com/ and create an OAuth2 Desktop app.
+# 2. Download credentials JSON and point credentials_file at it.
+# gmail:
+#   credentials_file: gmail_credentials.json
+#   token_file: gmail_token.json     # cached after first login
+
+# ── O365 / Microsoft 365 ──────────────────────────────────────────────────────
+# 1. Register an app in Azure Portal → App registrations.
+# 2. Set API permissions: Mail.ReadWrite (delegated).
+# 3. Copy the Application (client) ID below.
+# o365:
+#   client_id: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+#   tenant_id: common                # or your tenant GUID for single-tenant apps
+#   token_cache_file: o365_token_cache.json
+
+# ── Mailto unsubscribe (optional) ─────────────────────────────────────────────
+# Required only when a sender's List-Unsubscribe uses a mailto: link.
+# mailto:
+#   smtp_host: smtp.example.com
+#   smtp_port: 587
+#   from_address: you@example.com
+#   # password: secret              # or set SMTP_PASSWORD env var
