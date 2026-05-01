@@ -280,6 +280,7 @@ def scan(
     unsubscribe: Annotated[bool, typer.Option("--unsubscribe/--no-unsubscribe", help="Follow unsubscribe links for approved senders. Sends one request per sender (not per message). [dim]Default: on[/dim]")] = True,
     trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move all messages from approved senders to the Trash folder. Recoverable; providers typically purge trash after 30 days. [dim]Default: off[/dim]")] = False,
     delete: Annotated[bool, typer.Option("--delete", help="Permanently delete all messages from approved senders. Cannot be undone. Prompts for confirmation before acting. [dim]Default: off[/dim]")] = False,
+    reprocess: Annotated[bool, typer.Option("--reprocess", help="Show all senders again, ignoring the already-processed list.")] = False,
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to the log file. All actions and failures are appended here. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
@@ -385,7 +386,9 @@ def scan(
     # ------------------------------------------------------------------
     # 3. Interactive review
     # ------------------------------------------------------------------
-    processed_senders = load_processed(config_path)
+    processed_senders = set() if reprocess else load_processed(config_path)
+    if reprocess:
+        console.print("[dim]--reprocess: ignoring previously processed senders[/dim]")
     approved_senders: set[str] = set()
     clean_only_senders: set[str] = set()  # trash but don't unsubscribe
     auto_approved_senders: set[str] = set()
@@ -742,6 +745,7 @@ def cleanup(
     fetch_all: Annotated[bool, typer.Option("--all", help="Fetch every message in the folder, ignoring --max.")] = False,
     trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move chosen senders' messages to trash. [dim]Default: off[/dim]")] = False,
     delete: Annotated[bool, typer.Option("--delete", help="Permanently delete chosen senders' messages. Cannot be undone. [dim]Default: off[/dim]")] = False,
+    reprocess: Annotated[bool, typer.Option("--reprocess", help="Show all senders again, ignoring the already-processed list.")] = False,
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to log file. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
@@ -775,13 +779,15 @@ def cleanup(
         console.print(Panel("[yellow bold]DRY RUN MODE — no changes will be made[/yellow bold]", expand=False))
     console.print(f"[dim]Logging to {log_file}[/dim]")
 
-    processed = load_processed(config_path)
+    processed = set() if reprocess else load_processed(config_path)
     whitelist = set(cfg.whitelist)
 
     # ------------------------------------------------------------------
     # 1. Fetch
     # ------------------------------------------------------------------
     console.print(f"\n[bold]Connecting to [cyan]{cfg.provider}[/cyan] → folder [cyan]{cfg.folder}[/cyan]...[/bold]")
+    if reprocess:
+        console.print("[dim]--reprocess: ignoring previously processed senders[/dim]")
     provider = _build_provider(cfg)
 
     fetch_label = "all" if fetch_all else f"up to {cfg.max_messages}"
