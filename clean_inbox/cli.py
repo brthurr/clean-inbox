@@ -299,6 +299,7 @@ def scan(
          choose what to do with each:
 
            [green]y[/green]  act on this sender (unsubscribe + trash/delete if enabled)
+           [cyan]c[/cyan]  clean only: trash/delete messages but skip unsubscribe
            [yellow]n[/yellow]  skip this sender for now
            [cyan]w[/cyan]  whitelist: never flag again, but still trash existing messages
            [red]q[/red]  stop reviewing (already-approved senders are still acted on)
@@ -386,6 +387,7 @@ def scan(
     # ------------------------------------------------------------------
     processed_senders = load_processed(config_path)
     approved_senders: set[str] = set()
+    clean_only_senders: set[str] = set()  # trash but don't unsubscribe
     auto_approved_senders: set[str] = set()
     whitelisted_senders: set[str] = set()
 
@@ -406,7 +408,7 @@ def scan(
     if interactive and new_senders:
         console.print(
             "\n[bold]Review new senders:[/bold] "
-            "y=act on this sender  n=skip  w=whitelist + delete existing  q=quit\n"
+            "y=unsubscribe+clean  c=clean only (no unsub)  n=skip  w=whitelist+clean  q=quit\n"
         )
         for addr, results in new_senders.items():
             sample = results[0].message
@@ -418,12 +420,16 @@ def scan(
                 f"  [bold]{addr}[/bold]  {len(results)} msg(s)  {unsub_tag}\n"
                 f"  e.g. [dim]\"{example_subject}\"[/dim]"
             )
-            choice = Prompt.ask("  Action", choices=["y", "n", "w", "q"], default="y")
+            choice = Prompt.ask("  Action", choices=["y", "c", "n", "w", "q"], default="y")
             if choice == "q":
                 console.print("[dim]Stopping review early.[/dim]")
                 break
             elif choice == "y":
                 approved_senders.add(addr)
+                save_processed_entry(addr, config_path)
+            elif choice == "c":
+                approved_senders.add(addr)
+                clean_only_senders.add(addr)
                 save_processed_entry(addr, config_path)
             elif choice == "w":
                 whitelisted_senders.add(addr)
@@ -453,7 +459,7 @@ def scan(
 
     for addr in approved_senders:
         for r in grouped[addr]:
-            if r.has_unsubscribe and addr in newly_approved:
+            if r.has_unsubscribe and addr in newly_approved and addr not in clean_only_senders:
                 unsub_messages.append(r.message)
             if trash:
                 trash_messages.append(r.message)
@@ -550,6 +556,7 @@ def scan(
     summary.add_row("Auto-approved (seen before)", str(len(auto_approved_senders)))
     summary.add_row("New senders reviewed",  str(len(new_senders)))
     summary.add_row("Senders approved",      str(len(approved_senders)))
+    summary.add_row("Senders clean-only",    str(len(clean_only_senders)))
     summary.add_row("Senders whitelisted",   str(len(whitelisted_senders)))
     summary.add_row("Senders skipped",       str(skipped_senders))
     if unsubscribe:
