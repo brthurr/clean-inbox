@@ -714,6 +714,221 @@ def version() -> None:
     console.print(f"clean-inbox {__version__}")
 
 
+@app.command(
+    epilog=(
+        "[bold]Examples:[/bold]\n\n"
+        "  Preview what would be shown (no changes):\n"
+        "    [cyan]clean-inbox cleanup --dry-run[/cyan]\n\n"
+        "  Review all remaining senders and trash chosen ones:\n"
+        "    [cyan]clean-inbox cleanup --trash[/cyan]\n\n"
+        "  Full inbox sweep, permanently delete chosen senders:\n"
+        "    [cyan]clean-inbox cleanup --all --delete[/cyan]"
+    ),
+)
+def cleanup(
+    config: ConfigOpt = None,
+    dry_run: DryRunOpt = False,
+    folder: FolderOpt = None,
+    max_messages: MaxOpt = None,
+    fetch_all: Annotated[bool, typer.Option("--all", help="Fetch every message in the folder, ignoring --max.")] = False,
+    trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move chosen senders' messages to trash. [dim]Default: off[/dim]")] = False,
+    delete: Annotated[bool, typer.Option("--delete", help="Permanently delete chosen senders' messages. Cannot be undone. [dim]Default: off[/dim]")] = False,
+    log_file: Annotated[Path, typer.Option("--log-file", help="Path to log file. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
+) -> None:
+    """\
+    Bulk-delete transactional or notification emails by sender — no unsubscribe step.
+
+    Use this after [cyan]scan[/cyan] has handled your marketing mail. Fetches all messages,
+    groups every sender by message count, skips senders already processed or
+    whitelisted, then lets you review and choose which ones to trash or delete.
+
+    [bold]Interactive choices:[/bold]
+
+      [green]y[/green]  delete this sender's messages (trash or permanently, per flags)
+      [yellow]n[/yellow]  skip — leave this sender's messages alone
+      [cyan]w[/cyan]  whitelist — never show this sender again, keep their messages
+      [red]q[/red]  stop reviewing (already-approved senders are still acted on)
+
+    [bold]Note:[/bold] No unsubscribe requests are sent. This command only removes messages.
+    """
+    cfg, config_path = load_config(config)
+    if folder:
+        cfg.folder = folder
+    if fetch_all:
+        cfg.max_messages = sys.maxsize
+    elif max_messages:
+        cfg.max_messages = max_messages
+
+    _setup_logging(log_file, dry_run)
+
+    console.rule(f"[bold]clean-inbox cleanup v{__version__}[/bold]")
+    if dry_run:
+        console.print(Panel("[yellow bold]DRY RUN MODE — no changes will be made[/yellow bold]", expand=False))
+    console.print(f"[dim]Logging to {log_file}[/dim]")
+
+    processed = load_processed(config_path)
+    whitelist = set(cfg.whitelist)
+
+    # ------------------------------------------------------------------
+    # 1. Fetch
+    # ------------------------------------------------------------------
+    console.print(f"\n[bold]Connecting to [cyan]{cfg.provider}[/cyan] → folder [cyan]{cfg.folder}[/cyan]...[/bold]")
+    provider = _build_provider(cfg)
+
+    fetch_label = "all" if fetch_all else f"up to {cfg.max_messages}"
+    with provider:
+        with console.status(f"Fetching {fetch_label} messages..."):
+            messages = list(provider.fetch_messages(folder=cfg.folder, max_messages=cfg.max_messages))
+    console.print(f"  Fetched [bold]{len(messages)}[/bold] messages.")
+
+    # ------------------------------------------------------------------
+    # 2. Group by sender, skip processed + whitelisted
+    # ------------------------------------------------------------------
+    grouped: dict[str, list[EmailMessage]] = defaultdict(list)
+    for msg in messages:
+        if msg.sender_address not in processed and msg.sender_address not in whitelist:
+            grouped[msg.sender_address].append(msg)
+
+    skipped = len(messages) - sum(len(v) for v in grouped.values())
+    grouped = dict(sorted(grouped.items(), key=lambda kv: -len(kv[1])))
+
+    console.print(
+        f"  [bold]{len(grouped)}[/bold] sender(s) to review  "
+        f"[dim]({skipped} message(s) skipped — already processed or whitelisted)[/dim]\n"
+    )
+
+    if not grouped:
+        console.print("[green]Nothing left to review.[/green]")
+        raise typer.Exit(0)
+
+    # ------------------------------------------------------------------
+    # 3. Render sender table
+    # ------------------------------------------------------------------
+    table = Table(title="Remaining Senders", box=box.ROUNDED, show_lines=True, expand=True)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Sender", min_width=35)
+    table.add_column("Msgs", justify="right", width=6)
+    table.add_column("Latest subject", min_width=40)
+
+    for idx, (addr, msgs) in enumerate(grouped.items(), 1):
+        latest = sorted(msgs, key=lambda m: m.date or m.message_id, reverse=True)[0]
+        subject = latest.subject[:55] + ("…" if len(latest.subject) > 55 else "")
+        table.add_row(str(idx), addr, str(len(msgs)), subject)
+
+    console.print(table)
+
+    # ------------------------------------------------------------------
+    # 4. Interactive review
+    # ------------------------------------------------------------------
+    approved: set[str] = set()
+    whitelisted_now: set[str] = set()
+
+    console.print(
+        "\n[bold]Review each sender:[/bold] "
+        "y=delete messages  n=skip  w=whitelist (keep messages)  q=quit\n"
+    )
+    for addr, msgs in grouped.items():
+        latest = sorted(msgs, key=lambda m: m.date or m.message_id, reverse=True)[0]
+        example = latest.subject[:60] + ("…" if len(latest.subject) > 60 else "")
+        console.print(
+            f"  [bold]{addr}[/bold]  {len(msgs)} msg(s)\n"
+            f"  e.g. [dim]\"{example}\"[/dim]"
+        )
+        choice = Prompt.ask("  Action", choices=["y", "n", "w", "q"], default="n")
+        if choice == "q":
+            console.print("[dim]Stopping review early.[/dim]")
+            break
+        elif choice == "y":
+            approved.add(addr)
+            save_processed_entry(addr, config_path)
+        elif choice == "w":
+            whitelisted_now.add(addr)
+            wl_file = save_whitelist_entry(addr, config_path)
+            console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
+        console.print()
+
+    if not approved:
+        console.print("[dim]No senders selected for deletion. Done.[/dim]")
+        raise typer.Exit(0)
+
+    delete_messages = [msg for addr in approved for msg in grouped[addr]]
+    total = len(delete_messages)
+
+    # ------------------------------------------------------------------
+    # 5. Trash or delete
+    # ------------------------------------------------------------------
+    actioned = 0
+    if trash:
+        if not dry_run:
+            if Confirm.ask(f"\nMove [red]{total}[/red] message(s) to trash?"):
+                provider = _build_provider(cfg)
+                with provider:
+                    with console.status(f"Moving {total} messages to trash..."):
+                        for msg in delete_messages:
+                            provider.move_to_trash(msg)
+                            _log.info("CLEANUP TRASH  %-40s  subject=%r", msg.sender_address, msg.subject[:80])
+                actioned = total
+                console.print(f"[green]Moved {total} messages to trash.[/green]")
+            else:
+                console.print("[dim]Skipping trash.[/dim]")
+        else:
+            actioned = total
+            for msg in delete_messages:
+                _log.info("CLEANUP TRASH DRY-RUN  %-40s  subject=%r", msg.sender_address, msg.subject[:80])
+            console.print(f"\n[yellow][dry-run] Would move {total} message(s) to trash.[/yellow]")
+
+    elif delete:
+        if not dry_run:
+            if Confirm.ask(
+                f"\n[bold red]Permanently delete {total} message(s)? This cannot be undone.[/bold red]"
+            ):
+                provider = _build_provider(cfg)
+                with provider:
+                    with console.status(f"Permanently deleting {total} messages..."):
+                        for msg in delete_messages:
+                            provider.delete_permanently(msg)
+                            _log.info("CLEANUP DELETE %-40s  subject=%r", msg.sender_address, msg.subject[:80])
+                actioned = total
+                console.print(f"[green]Permanently deleted {total} messages.[/green]")
+            else:
+                console.print("[dim]Skipping deletion.[/dim]")
+        else:
+            actioned = total
+            for msg in delete_messages:
+                _log.info("CLEANUP DELETE DRY-RUN %-40s  subject=%r", msg.sender_address, msg.subject[:80])
+            console.print(f"\n[yellow][dry-run] Would permanently delete {total} message(s).[/yellow]")
+    else:
+        console.print(
+            f"\n[yellow]{total} message(s) selected but no action flag given. "
+            "Use --trash or --delete to remove them.[/yellow]"
+        )
+
+    # ------------------------------------------------------------------
+    # 6. Summary
+    # ------------------------------------------------------------------
+    summary = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    summary.add_column(style="dim")
+    summary.add_column(justify="right", style="bold")
+
+    summary.add_row("Emails fetched",       str(len(messages)))
+    summary.add_row("Senders reviewed",     str(len(grouped)))
+    summary.add_row("Senders approved",     str(len(approved)))
+    summary.add_row("Senders whitelisted",  str(len(whitelisted_now)))
+    summary.add_row("Senders skipped",      str(len(grouped) - len(approved) - len(whitelisted_now)))
+    if trash:
+        label = "Moved to trash (dry run)" if dry_run else "Moved to trash"
+        summary.add_row(label, str(actioned))
+    if delete:
+        label = "Permanently deleted (dry run)" if dry_run else "Permanently deleted"
+        summary.add_row(label, f"[red]{actioned}[/red]")
+
+    console.print()
+    console.print(Panel(summary, title="[bold]Summary[/bold]", expand=False))
+    console.print("[bold green]Done.[/bold green]")
+    _log.info("Cleanup complete — reviewed=%d approved=%d actioned=%d", len(grouped), len(approved), actioned)
+    _log.info("")
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
