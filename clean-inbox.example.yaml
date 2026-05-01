@@ -59,8 +59,11 @@ imap:
 #   tenant_id: common                # or your tenant GUID for single-tenant apps
 #   token_cache_file: o365_token_cache.json
 
-# ── Mailto unsubscribe (optional) ─────────────────────────────────────────────
-# Required only when a sender's List-Unsubscribe uses a mailto: link.
+# ── Mailto unsubscribe (optional, IMAP/O365 only) ─────────────────────────────
+# Required only when a sender's List-Unsubscribe uses a mailto: link AND you
+# are using the IMAP or O365 provider.
+# Gmail users: mailto unsubscribes are sent via the Gmail API automatically —
+# no SMTP configuration needed.
 # mailto:
 #   smtp_host: smtp.example.com
 #   smtp_port: 587

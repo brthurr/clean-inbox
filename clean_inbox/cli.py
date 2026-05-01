@@ -24,24 +24,26 @@ from clean_inbox.providers.base import EmailMessage, EmailProvider
 from clean_inbox.unsubscriber import UnsubscribeResult, Unsubscriber
 
 _APP_HELP = """\
-Scan your inbox for junk and marketing emails, review identified senders,
-automatically unsubscribe, and optionally move messages to trash or delete them.
+Identify, unsubscribe from, and delete junk and marketing emails — interactively,
+one sender at a time.
 
 [bold]Supported providers:[/bold] Gmail · Microsoft 365 / Outlook · any IMAP server
 
 [bold]Typical workflow:[/bold]
 
-  1. Run a dry-run first to see what would be flagged:
+  1. Dry-run to see what would be flagged (no changes):
 
        [cyan]clean-inbox scan --dry-run[/cyan]
 
-  2. Review the sender table, then run for real:
+  2. Review marketing senders, unsubscribe, and trash:
 
        [cyan]clean-inbox scan --trash[/cyan]
 
-  3. To clean your entire mailbox at once:
+  3. Clean up transactional leftovers (receipts, alerts, notifications):
 
-       [cyan]clean-inbox scan --all --trash[/cyan]
+       [cyan]clean-inbox cleanup --trash[/cyan]
+
+  4. Repeat until the inbox is empty — only new senders appear each run.
 
 [bold]Junk scoring (0–100):[/bold]
 
@@ -53,6 +55,16 @@ automatically unsubscribe, and optionally move messages to trash or delete them.
 
   Messages scoring ≥ threshold (default 30) are flagged. Whitelisted
   senders are always skipped regardless of score.
+
+[bold]State files (stored beside your config):[/bold]
+
+  clean-inbox.scan-processed    senders reviewed by scan (auto-approved next run)
+  clean-inbox.cleanup-processed senders reviewed by cleanup
+  clean-inbox.scan-whitelist    senders never flagged as junk
+  clean-inbox.cleanup-whitelist senders never shown in cleanup
+
+  scan and cleanup track state independently — a sender reviewed in scan
+  still appears in cleanup for message deletion.
 
 [bold]Config file locations (checked in order):[/bold]
 
@@ -265,7 +277,9 @@ def _log_unsub_results(results: list) -> None:
         "    [cyan]clean-inbox scan --trash[/cyan]\n\n"
         "  Scan entire inbox non-interactively and permanently delete:\n"
         "    [cyan]clean-inbox scan --all --no-interactive --delete[/cyan]\n\n"
-        "  Use a specific config and raise the sensitivity threshold:\n"
+        "  Re-review all senders, ignoring previous run history:\n"
+        "    [cyan]clean-inbox scan --trash --reprocess[/cyan]\n\n"
+        "  Use a specific config and lower the sensitivity threshold:\n"
         "    [cyan]clean-inbox scan --config ~/my-config.yaml --threshold 20[/cyan]"
     ),
 )
@@ -284,7 +298,7 @@ def scan(
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to the log file. All actions and failures are appended here. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
-    Fetch messages, score each one for junk signals, group by sender, and act.
+    Fetch messages, score for junk signals, review by sender, unsubscribe, and act.
 
     [bold]Steps:[/bold]
 
@@ -295,27 +309,30 @@ def scan(
          databases, and subject-line patterns. Messages at or above --threshold
          are flagged.
 
-      3. [bold]Review[/bold] — displays a table of identified senders (one row per sender,
-         regardless of how many messages they sent). In interactive mode you
-         choose what to do with each:
+      3. [bold]Review[/bold] — displays a table of identified senders (one row per sender).
+         Senders from previous runs are auto-approved and skipped. For new senders:
 
-           [green]y[/green]  act on this sender (unsubscribe + trash/delete if enabled)
-           [cyan]c[/cyan]  clean only: trash/delete messages but skip unsubscribe
+           [green]y[/green]  unsubscribe + trash/delete (per flags)
+           [cyan]c[/cyan]  clean only — trash/delete but skip unsubscribe
            [yellow]n[/yellow]  skip this sender for now
-           [cyan]w[/cyan]  whitelist: never flag again, but still trash existing messages
+           [cyan]w[/cyan]  whitelist — never flag again; saves to clean-inbox.scan-whitelist
            [red]q[/red]  stop reviewing (already-approved senders are still acted on)
 
-      4. [bold]Unsubscribe[/bold] — for each approved sender that has a List-Unsubscribe
-         header, sends one unsubscribe request using the best available method:
+      4. [bold]Unsubscribe[/bold] — for each newly approved sender with a List-Unsubscribe
+         header, sends one request per sender using the best available method:
          RFC 8058 one-click POST → HTTP GET → mailto → body link.
+         Gmail users: mailto unsubscribes use the Gmail API (no SMTP needed).
 
-      5. [bold]Trash / Delete[/bold] — moves or permanently removes all messages in the
-         current batch from approved senders.
+      5. [bold]Trash / Delete[/bold] — moves or permanently removes all messages from
+         approved senders. Requires --trash or --delete to be set.
 
-      6. [bold]Summary[/bold] — prints a table showing counts for every action taken.
+      6. [bold]Summary[/bold] — prints a table of counts for every action taken.
 
-    [bold]Note:[/bold] --trash and --delete are opt-in. A bare [cyan]clean-inbox scan[/cyan] will
-    analyze and unsubscribe but will not touch your messages.
+    Reviewed senders are saved to [dim]clean-inbox.scan-processed[/dim] and skipped on
+    future runs. Use --reprocess to ignore that list and re-review everyone.
+
+    [bold]Note:[/bold] --trash and --delete are opt-in. Without them, scan will analyze
+    and unsubscribe but will not move or delete any messages.
     """
 
     cfg, config_path = load_config(config)
@@ -731,10 +748,12 @@ def version() -> None:
         "[bold]Examples:[/bold]\n\n"
         "  Preview what would be shown (no changes):\n"
         "    [cyan]clean-inbox cleanup --dry-run[/cyan]\n\n"
-        "  Review all remaining senders and trash chosen ones:\n"
+        "  Review remaining senders and trash chosen ones:\n"
         "    [cyan]clean-inbox cleanup --trash[/cyan]\n\n"
         "  Full inbox sweep, permanently delete chosen senders:\n"
-        "    [cyan]clean-inbox cleanup --all --delete[/cyan]"
+        "    [cyan]clean-inbox cleanup --all --delete[/cyan]\n\n"
+        "  Re-review all senders, ignoring previous cleanup history:\n"
+        "    [cyan]clean-inbox cleanup --trash --reprocess[/cyan]"
     ),
 )
 def cleanup(
@@ -749,20 +768,24 @@ def cleanup(
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to log file. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
-    Bulk-delete transactional or notification emails by sender — no unsubscribe step.
+    Delete transactional or notification emails by sender — no unsubscribe step.
 
-    Use this after [cyan]scan[/cyan] has handled your marketing mail. Fetches all messages,
-    groups every sender by message count, skips senders already processed or
-    whitelisted, then lets you review and choose which ones to trash or delete.
+    Run this after [cyan]scan[/cyan] has handled marketing mail to clear out receipts,
+    alerts, account notifications, and other non-marketing clutter.
+
+    Maintains its own processed and whitelist files ([dim]clean-inbox.cleanup-processed[/dim]
+    and [dim]clean-inbox.cleanup-whitelist[/dim]), independent of [cyan]scan[/cyan]. Senders reviewed
+    in [cyan]scan[/cyan] still appear here so their messages can be deleted separately.
 
     [bold]Interactive choices:[/bold]
 
-      [green]y[/green]  delete this sender's messages (trash or permanently, per flags)
-      [yellow]n[/yellow]  skip — leave this sender's messages alone
-      [cyan]w[/cyan]  whitelist — never show this sender again, keep their messages
+      [green]y[/green]  trash/delete this sender's messages (per flags)
+      [yellow]n[/yellow]  skip — leave this sender's messages alone (default)
+      [cyan]w[/cyan]  whitelist — never show in cleanup again; saves to clean-inbox.cleanup-whitelist
       [red]q[/red]  stop reviewing (already-approved senders are still acted on)
 
-    [bold]Note:[/bold] No unsubscribe requests are sent. This command only removes messages.
+    Use --reprocess to ignore the processed list and re-review all senders.
+    No unsubscribe requests are sent by this command.
     """
     cfg, config_path = load_config(config)
     if folder:
