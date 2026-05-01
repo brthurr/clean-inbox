@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -215,6 +217,38 @@ def _render_unsub_results(results: list[UnsubscribeResult]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+_log = logging.getLogger("clean_inbox")
+
+DEFAULT_LOG_FILE = Path("clean-inbox.log")
+
+
+def _setup_logging(log_file: Path, dry_run: bool) -> None:
+    """Configure file logging. One run = one block of entries separated by a blank line."""
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    _log.addHandler(handler)
+    _log.setLevel(logging.DEBUG)
+    mode = " [DRY RUN]" if dry_run else ""
+    _log.info("=" * 60)
+    _log.info("clean-inbox run started%s", mode)
+
+
+def _log_unsub_results(results: list) -> None:
+    for r in results:
+        if r.dry_run:
+            _log.info("UNSUB DRY-RUN  %-40s  method=%s  target=%s", r.sender, r.method.value, r.target)
+        elif r.success:
+            _log.info("UNSUB OK       %-40s  method=%s  target=%s", r.sender, r.method.value, r.target)
+        else:
+            _log.error("UNSUB FAILED   %-40s  method=%s  error=%s  target=%s",
+                       r.sender, r.method.value, r.error, r.target)
+
+
+# ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
 
@@ -243,6 +277,7 @@ def scan(
     unsubscribe: Annotated[bool, typer.Option("--unsubscribe/--no-unsubscribe", help="Follow unsubscribe links for approved senders. Sends one request per sender (not per message). [dim]Default: on[/dim]")] = True,
     trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move all messages from approved senders to the Trash folder. Recoverable; providers typically purge trash after 30 days. [dim]Default: off[/dim]")] = False,
     delete: Annotated[bool, typer.Option("--delete", help="Permanently delete all messages from approved senders. Cannot be undone. Prompts for confirmation before acting. [dim]Default: off[/dim]")] = False,
+    log_file: Annotated[Path, typer.Option("--log-file", help="Path to the log file. All actions and failures are appended here. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
     Fetch messages, score each one for junk signals, group by sender, and act.
@@ -288,9 +323,12 @@ def scan(
     if threshold is not None:
         cfg.junk_threshold = threshold
 
+    _setup_logging(log_file, dry_run)
+
     console.rule(f"[bold]clean-inbox v{__version__}[/bold]")
     if dry_run:
         console.print(Panel("[yellow bold]DRY RUN MODE — no changes will be made[/yellow bold]", expand=False))
+    console.print(f"[dim]Logging to {log_file}[/dim]")
 
     analyzer = EmailAnalyzer(
         junk_threshold=cfg.junk_threshold,
@@ -409,6 +447,7 @@ def scan(
 
         unsub_results = unsub.unsubscribe_batch(unique_unsub, dry_run=dry_run)
         _render_unsub_results(unsub_results)
+        _log_unsub_results(unsub_results)
         unsub_ok = sum(1 for r in unsub_results if r.success)
         unsub_failed = sum(1 for r in unsub_results if not r.success)
 
@@ -429,9 +468,13 @@ def scan(
                             provider.move_to_trash(msg)
                 trashed = total
                 console.print(f"[green]Moved {total} messages to trash.[/green]")
+                for msg in trash_messages:
+                    _log.info("TRASHED        %-40s  subject=%r", msg.sender_address, msg.subject[:80])
         else:
             trashed = total
             console.print(f"\n[yellow][dry-run] Would move {total} message(s) to trash.[/yellow]")
+            for msg in trash_messages:
+                _log.info("TRASH DRY-RUN  %-40s  subject=%r", msg.sender_address, msg.subject[:80])
 
     # ------------------------------------------------------------------
     # 6. Permanently delete
@@ -452,9 +495,13 @@ def scan(
                             provider.delete_permanently(msg)
                 deleted = total
                 console.print(f"[green]Permanently deleted {total} messages.[/green]")
+                for msg in delete_messages:
+                    _log.info("DELETED        %-40s  subject=%r", msg.sender_address, msg.subject[:80])
         else:
             deleted = total
             console.print(f"\n[yellow][dry-run] Would permanently delete {total} message(s).[/yellow]")
+            for msg in delete_messages:
+                _log.info("DELETE DRY-RUN %-40s  subject=%r", msg.sender_address, msg.subject[:80])
 
     # ------------------------------------------------------------------
     # 7. Summary
@@ -489,6 +536,12 @@ def scan(
     console.print()
     console.print(Panel(summary, title="[bold]Summary[/bold]", expand=False))
     console.print("[bold green]Done.[/bold green]")
+
+    _log.info(
+        "Run complete — fetched=%d flagged=%d unsubOK=%d unsubFailed=%d trashed=%d deleted=%d",
+        len(all_results), len(junk_results), unsub_ok, unsub_failed, trashed, deleted,
+    )
+    _log.info("")  # blank line between runs
 
 
 @app.command(
