@@ -21,10 +21,52 @@ from clean_inbox.config import AppConfig, load_config, save_whitelist_entry
 from clean_inbox.providers.base import EmailMessage, EmailProvider
 from clean_inbox.unsubscriber import UnsubscribeResult, Unsubscriber
 
+_APP_HELP = """\
+Scan your inbox for junk and marketing emails, review identified senders,
+automatically unsubscribe, and optionally move messages to trash or delete them.
+
+[bold]Supported providers:[/bold] Gmail · Microsoft 365 / Outlook · any IMAP server
+
+[bold]Typical workflow:[/bold]
+
+  1. Run a dry-run first to see what would be flagged:
+
+       [cyan]clean-inbox scan --dry-run[/cyan]
+
+  2. Review the sender table, then run for real:
+
+       [cyan]clean-inbox scan --trash[/cyan]
+
+  3. To clean your entire mailbox at once:
+
+       [cyan]clean-inbox scan --all --trash[/cyan]
+
+[bold]Junk scoring (0–100):[/bold]
+
+  +60  List-Unsubscribe header present (RFC 2369)
+  +30  Precedence: bulk / list / junk
+  +40  Sender domain is a known marketing ESP
+  +20  X-Mailer matches a marketing tool
+  +15  Subject matches a marketing keyword pattern
+
+  Messages scoring ≥ threshold (default 30) are flagged. Whitelisted
+  senders are always skipped regardless of score.
+
+[bold]Config file locations (checked in order):[/bold]
+
+  ./clean-inbox.yaml  ·  ./clean-inbox.yml
+  ~/.config/clean-inbox/config.yaml
+
+Copy [cyan]clean-inbox.example.yaml[/cyan] to get started.
+"""
+
 app = typer.Typer(
     name="clean-inbox",
-    help="Identify and unsubscribe from junk/marketing emails.",
+    help=_APP_HELP,
     add_completion=False,
+    rich_markup_mode="rich",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    epilog="Run [cyan]clean-inbox COMMAND --help[/cyan] for per-command details.",
 )
 console = Console()
 err_console = Console(stderr=True)
@@ -36,23 +78,23 @@ err_console = Console(stderr=True)
 
 ConfigOpt = Annotated[
     Optional[Path],
-    typer.Option("--config", "-c", help="Path to config YAML file."),
+    typer.Option("--config", "-c", help="Path to a config YAML file. Overrides the default search path."),
 ]
 DryRunOpt = Annotated[
     bool,
-    typer.Option("--dry-run", "-n", help="Preview actions without executing them."),
+    typer.Option("--dry-run", "-n", help="Preview all actions without making any changes. Safe to run at any time."),
 ]
 FolderOpt = Annotated[
     Optional[str],
-    typer.Option("--folder", "-f", help="Mailbox folder to scan (default: INBOX)."),
+    typer.Option("--folder", "-f", help="Mailbox folder to scan. Overrides the value in config. [dim]Default: INBOX[/dim]"),
 ]
 MaxOpt = Annotated[
     Optional[int],
-    typer.Option("--max", "-m", help="Maximum number of messages to fetch."),
+    typer.Option("--max", "-m", help="Maximum number of messages to fetch (most recent first). Overrides config. [dim]Default: 500[/dim]"),
 ]
 ThresholdOpt = Annotated[
     Optional[int],
-    typer.Option("--threshold", "-t", help="Junk score threshold 0-100 (default: 30)."),
+    typer.Option("--threshold", "-t", help="Junk confidence score (0–100). Messages at or above this are flagged. Lower = broader catch. [dim]Default: 30[/dim]"),
 ]
 
 
@@ -177,20 +219,64 @@ def _render_unsub_results(results: list[UnsubscribeResult]) -> None:
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(
+    epilog=(
+        "[bold]Examples:[/bold]\n\n"
+        "  Preview what would be flagged (no changes):\n"
+        "    [cyan]clean-inbox scan --dry-run[/cyan]\n\n"
+        "  Interactive review, then unsubscribe and trash:\n"
+        "    [cyan]clean-inbox scan --trash[/cyan]\n\n"
+        "  Scan entire inbox non-interactively and permanently delete:\n"
+        "    [cyan]clean-inbox scan --all --no-interactive --delete[/cyan]\n\n"
+        "  Use a specific config and raise the sensitivity threshold:\n"
+        "    [cyan]clean-inbox scan --config ~/my-config.yaml --threshold 20[/cyan]"
+    ),
+)
 def scan(
     config: ConfigOpt = None,
     dry_run: DryRunOpt = False,
     folder: FolderOpt = None,
     max_messages: MaxOpt = None,
-    fetch_all: Annotated[bool, typer.Option("--all", help="Fetch every message in the folder (ignores --max).")] = False,
+    fetch_all: Annotated[bool, typer.Option("--all", help="Fetch every message in the folder, ignoring --max. Use for a full inbox clean-up.")] = False,
     threshold: ThresholdOpt = None,
-    interactive: Annotated[bool, typer.Option("--interactive", "-i", help="Review each sender before acting.")] = True,
-    unsubscribe: Annotated[bool, typer.Option("--unsubscribe/--no-unsubscribe", help="Follow unsubscribe links.")] = True,
-    trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move matched messages to trash.")] = False,
-    delete: Annotated[bool, typer.Option("--delete", help="Permanently delete matched messages (cannot be undone).")] = False,
+    interactive: Annotated[bool, typer.Option("--interactive/--no-interactive", "-i", help="Prompt to approve or skip each identified sender before acting. Disable for scripted/unattended runs. [dim]Default: on[/dim]")] = True,
+    unsubscribe: Annotated[bool, typer.Option("--unsubscribe/--no-unsubscribe", help="Follow unsubscribe links for approved senders. Sends one request per sender (not per message). [dim]Default: on[/dim]")] = True,
+    trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move all messages from approved senders to the Trash folder. Recoverable; providers typically purge trash after 30 days. [dim]Default: off[/dim]")] = False,
+    delete: Annotated[bool, typer.Option("--delete", help="Permanently delete all messages from approved senders. Cannot be undone. Prompts for confirmation before acting. [dim]Default: off[/dim]")] = False,
 ) -> None:
-    """Scan inbox, identify junk senders, and optionally unsubscribe."""
+    """\
+    Fetch messages, score each one for junk signals, group by sender, and act.
+
+    [bold]Steps:[/bold]
+
+      1. [bold]Fetch[/bold]  — pulls up to --max messages from the folder (most recent first).
+         Use --all to fetch everything with no limit.
+
+      2. [bold]Analyze[/bold] — scores each message 0–100 using header signals, sender domain
+         databases, and subject-line patterns. Messages at or above --threshold
+         are flagged.
+
+      3. [bold]Review[/bold] — displays a table of identified senders (one row per sender,
+         regardless of how many messages they sent). In interactive mode you
+         choose what to do with each:
+
+           [green]y[/green]  act on this sender (unsubscribe + trash/delete if enabled)
+           [yellow]n[/yellow]  skip this sender for now
+           [cyan]w[/cyan]  whitelist: never flag again, but still trash existing messages
+           [red]q[/red]  stop reviewing (already-approved senders are still acted on)
+
+      4. [bold]Unsubscribe[/bold] — for each approved sender that has a List-Unsubscribe
+         header, sends one unsubscribe request using the best available method:
+         RFC 8058 one-click POST → HTTP GET → mailto → body link.
+
+      5. [bold]Trash / Delete[/bold] — moves or permanently removes all messages in the
+         current batch from approved senders.
+
+      6. [bold]Summary[/bold] — prints a table showing counts for every action taken.
+
+    [bold]Note:[/bold] --trash and --delete are opt-in. A bare [cyan]clean-inbox scan[/cyan] will
+    analyze and unsubscribe but will not touch your messages.
+    """
 
     cfg, config_path = load_config(config)
     if folder:
@@ -405,15 +491,34 @@ def scan(
     console.print("[bold green]Done.[/bold green]")
 
 
-@app.command()
+@app.command(
+    epilog=(
+        "[bold]Examples:[/bold]\n\n"
+        "  List all flagged senders in INBOX:\n"
+        "    [cyan]clean-inbox senders[/cyan]\n\n"
+        "  Only show senders with 5 or more messages:\n"
+        "    [cyan]clean-inbox senders --min-count 5[/cyan]\n\n"
+        "  Scan a different folder with a stricter threshold:\n"
+        "    [cyan]clean-inbox senders --folder Promotions --threshold 50[/cyan]"
+    ),
+)
 def senders(
     config: ConfigOpt = None,
     folder: FolderOpt = None,
     max_messages: MaxOpt = None,
     threshold: ThresholdOpt = None,
-    min_count: Annotated[int, typer.Option("--min-count", help="Only show senders with at least N messages.")] = 1,
+    min_count: Annotated[int, typer.Option("--min-count", help="Only show senders that have at least N messages in the batch. Useful for filtering noise. [dim]Default: 1[/dim]")] = 1,
 ) -> None:
-    """List junk senders found in the inbox without taking any action."""
+    """\
+    Read-only scan: list every identified junk sender without taking any action.
+
+    Connects to your mailbox, fetches up to --max messages, scores each one,
+    then prints a table grouped by sender showing message count, average junk
+    score, whether an unsubscribe link was found, and the reasons it was flagged.
+
+    Nothing is modified. Use this command to explore what [cyan]scan[/cyan] would act on
+    before committing to any changes.
+    """
 
     cfg, _ = load_config(config)
     if folder:
@@ -453,15 +558,37 @@ def senders(
     console.print(f"\nTotal: [bold]{len(grouped)}[/bold] senders, [bold]{len(junk)}[/bold] messages flagged.")
 
 
-@app.command()
+@app.command(
+    epilog=(
+        "[bold]Examples:[/bold]\n\n"
+        "  Preview unsubscribe without sending anything:\n"
+        "    [cyan]clean-inbox unsubscribe-sender newsletters@store.com --dry-run[/cyan]\n\n"
+        "  Unsubscribe for real:\n"
+        "    [cyan]clean-inbox unsubscribe-sender newsletters@store.com[/cyan]"
+    ),
+)
 def unsubscribe_sender(
-    address: Annotated[str, typer.Argument(help="Sender email address to unsubscribe from.")],
+    address: Annotated[str, typer.Argument(help="The sender email address to unsubscribe from (e.g. newsletters@example.com).")],
     config: ConfigOpt = None,
     dry_run: DryRunOpt = False,
     folder: FolderOpt = None,
     max_messages: MaxOpt = None,
 ) -> None:
-    """Unsubscribe from a specific sender address."""
+    """\
+    Unsubscribe from a single known sender without scanning the full inbox.
+
+    Searches the folder for messages from ADDRESS, picks the one most likely
+    to carry an unsubscribe mechanism, and attempts to unsubscribe using the
+    best available method:
+
+      1. RFC 8058 one-click POST (List-Unsubscribe-Post header)
+      2. HTTP GET  (List-Unsubscribe header with an https: link)
+      3. mailto    (List-Unsubscribe header with a mailto: link)
+      4. Body link (scans the email HTML/text for an unsubscribe URL)
+
+    Use --dry-run to see which method and URL would be used without sending
+    any request.
+    """
 
     cfg, _ = load_config(config)
     if folder:
@@ -501,7 +628,7 @@ def unsubscribe_sender(
 
 @app.command()
 def version() -> None:
-    """Print the version and exit."""
+    """Print the version number and exit."""
     console.print(f"clean-inbox {__version__}")
 
 
