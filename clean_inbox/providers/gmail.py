@@ -13,8 +13,8 @@ from typing import Iterator
 from clean_inbox.providers.base import EmailMessage, EmailProvider
 
 SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://mail.google.com/",  # required for permanent deletion
 ]
 
 
