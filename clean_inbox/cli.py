@@ -188,6 +188,7 @@ def scan(
     interactive: Annotated[bool, typer.Option("--interactive", "-i", help="Review each sender before acting.")] = True,
     unsubscribe: Annotated[bool, typer.Option("--unsubscribe/--no-unsubscribe", help="Follow unsubscribe links.")] = True,
     trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move matched messages to trash.")] = False,
+    delete: Annotated[bool, typer.Option("--delete", help="Permanently delete matched messages (cannot be undone).")] = False,
 ) -> None:
     """Scan inbox, identify junk senders, and optionally unsubscribe."""
 
@@ -298,6 +299,7 @@ def scan(
     # ------------------------------------------------------------------
     unsub_messages: list[EmailMessage] = []
     trash_messages: list[EmailMessage] = []
+    delete_messages: list[EmailMessage] = []
 
     for addr in approved_senders:
         for r in grouped[addr]:
@@ -305,6 +307,8 @@ def scan(
                 unsub_messages.append(r.message)
             if trash:
                 trash_messages.append(r.message)
+            if delete:
+                delete_messages.append(r.message)
 
     unsub_ok = unsub_failed = 0
     if unsubscribe and unsub_messages:
@@ -344,7 +348,30 @@ def scan(
             console.print(f"\n[yellow][dry-run] Would move {total} message(s) to trash.[/yellow]")
 
     # ------------------------------------------------------------------
-    # 6. Summary
+    # 6. Permanently delete
+    # ------------------------------------------------------------------
+    deleted = 0
+    if delete and delete_messages:
+        total = len(delete_messages)
+        if not dry_run:
+            if not Confirm.ask(
+                f"\n[bold red]Permanently delete {total} message(s)? This cannot be undone.[/bold red]"
+            ):
+                console.print("[dim]Skipping permanent delete.[/dim]")
+            else:
+                provider = _build_provider(cfg)
+                with provider:
+                    with console.status(f"Permanently deleting {total} messages..."):
+                        for msg in delete_messages:
+                            provider.delete_permanently(msg)
+                deleted = total
+                console.print(f"[green]Permanently deleted {total} messages.[/green]")
+        else:
+            deleted = total
+            console.print(f"\n[yellow][dry-run] Would permanently delete {total} message(s).[/yellow]")
+
+    # ------------------------------------------------------------------
+    # 7. Summary
     # ------------------------------------------------------------------
     skipped_senders = len(grouped) - len(approved_senders)
     flagged_msgs = sum(len(v) for v in grouped.values())
@@ -369,6 +396,9 @@ def scan(
     if trash:
         label = "Moved to trash (dry run)" if dry_run else "Moved to trash"
         summary.add_row(label, str(trashed))
+    if delete:
+        label = "Permanently deleted (dry run)" if dry_run else "Permanently deleted"
+        summary.add_row(label, f"[red]{deleted}[/red]")
 
     console.print()
     console.print(Panel(summary, title="[bold]Summary[/bold]", expand=False))
