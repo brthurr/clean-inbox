@@ -98,16 +98,25 @@ def save_whitelist_entry(address: str, config_path: Path | None = None) -> Path:
     return wl_path
 
 
-def _processed_path(config_path: Path | None) -> Path:
+def _processed_path(config_path: Path | None, command: str = "scan") -> Path:
+    filename = f"clean-inbox.{command}-processed"
     if config_path:
-        return config_path.parent / "clean-inbox.processed"
-    return Path("clean-inbox.processed")
+        return config_path.parent / filename
+    return Path(filename)
 
 
-def load_processed(config_path: Path | None = None) -> set[str]:
-    """Load the set of sender addresses previously approved with 'y'."""
-    path = _processed_path(config_path)
+def load_processed(config_path: Path | None = None, command: str = "scan") -> set[str]:
+    """Load the set of sender addresses previously processed by the given command."""
+    path = _processed_path(config_path, command)
+    # Migrate legacy shared file on first use
     if not path.exists():
+        legacy = config_path.parent / "clean-inbox.processed" if config_path else Path("clean-inbox.processed")
+        if legacy.exists():
+            return {
+                line.strip().lower()
+                for line in legacy.read_text().splitlines()
+                if line.strip() and not line.startswith("#")
+            }
         return set()
     return {
         line.strip().lower()
@@ -116,10 +125,10 @@ def load_processed(config_path: Path | None = None) -> set[str]:
     }
 
 
-def save_processed_entry(address: str, config_path: Path | None = None) -> None:
-    """Append a sender address to the processed file."""
-    path = _processed_path(config_path)
-    existing = load_processed(config_path)
+def save_processed_entry(address: str, config_path: Path | None = None, command: str = "scan") -> None:
+    """Append a sender address to the command-specific processed file."""
+    path = _processed_path(config_path, command)
+    existing = load_processed(config_path, command)
     if address.lower() not in existing:
         with open(path, "a") as fh:
             fh.write(address.lower() + "\n")

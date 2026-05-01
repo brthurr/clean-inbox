@@ -386,7 +386,7 @@ def scan(
     # ------------------------------------------------------------------
     # 3. Interactive review
     # ------------------------------------------------------------------
-    processed_senders = set() if reprocess else load_processed(config_path)
+    processed_senders = set() if reprocess else load_processed(config_path, command="scan")
     if reprocess:
         console.print("[dim]--reprocess: ignoring previously processed senders[/dim]")
     approved_senders: set[str] = set()
@@ -429,11 +429,11 @@ def scan(
                 break
             elif choice == "y":
                 approved_senders.add(addr)
-                save_processed_entry(addr, config_path)
+                save_processed_entry(addr, config_path, command="scan")
             elif choice == "c":
                 approved_senders.add(addr)
                 clean_only_senders.add(addr)
-                save_processed_entry(addr, config_path)
+                save_processed_entry(addr, config_path, command="scan")
             elif choice == "w":
                 whitelisted_senders.add(addr)
                 approved_senders.add(addr)
@@ -443,7 +443,7 @@ def scan(
     elif not interactive:
         for addr in new_senders:
             approved_senders.add(addr)
-            save_processed_entry(addr, config_path)
+            save_processed_entry(addr, config_path, command="scan")
 
     if not approved_senders:
         console.print("[dim]No senders approved for action. Done.[/dim]")
@@ -779,7 +779,7 @@ def cleanup(
         console.print(Panel("[yellow bold]DRY RUN MODE — no changes will be made[/yellow bold]", expand=False))
     console.print(f"[dim]Logging to {log_file}[/dim]")
 
-    processed = set() if reprocess else load_processed(config_path)
+    processed = set() if reprocess else load_processed(config_path, command="cleanup")
     whitelist = set(cfg.whitelist)
 
     # ------------------------------------------------------------------
@@ -855,7 +855,7 @@ def cleanup(
             break
         elif choice == "y":
             approved.add(addr)
-            save_processed_entry(addr, config_path)
+            save_processed_entry(addr, config_path, command="cleanup")
         elif choice == "w":
             whitelisted_now.add(addr)
             wl_file = save_whitelist_entry(addr, config_path)
