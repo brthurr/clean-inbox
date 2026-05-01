@@ -52,6 +52,12 @@ def _parse_list_unsubscribe(header: str) -> list[str]:
     return _ANGLE_RE.findall(header)
 
 
+def has_actionable_unsubscribe(message: "EmailMessage") -> bool:
+    """Return True only if the message has at least one parseable unsubscribe URI."""
+    uris = _parse_list_unsubscribe(message.list_unsubscribe or "")
+    return any(u.startswith("http") or u.startswith("mailto") for u in uris)
+
+
 # ---------------------------------------------------------------------------
 # Body link extraction
 # ---------------------------------------------------------------------------

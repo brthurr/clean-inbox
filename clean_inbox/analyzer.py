@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from clean_inbox.providers.base import EmailMessage
+from clean_inbox.unsubscriber import has_actionable_unsubscribe
 
 # ---------------------------------------------------------------------------
 # Known marketing ESP domains / patterns
@@ -109,7 +110,7 @@ class AnalysisResult:
 
     @property
     def has_unsubscribe(self) -> bool:
-        return bool(self.message.list_unsubscribe)
+        return has_actionable_unsubscribe(self.message)
 
 
 class EmailAnalyzer:
