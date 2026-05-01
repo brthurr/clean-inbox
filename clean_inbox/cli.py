@@ -17,7 +17,7 @@ from rich.text import Text
 
 from clean_inbox import __version__
 from clean_inbox.analyzer import AnalysisResult, EmailAnalyzer
-from clean_inbox.config import AppConfig, load_config
+from clean_inbox.config import AppConfig, load_config, save_whitelist_entry
 from clean_inbox.providers.base import EmailMessage, EmailProvider
 from clean_inbox.unsubscriber import UnsubscribeResult, Unsubscriber
 
@@ -183,6 +183,7 @@ def scan(
     dry_run: DryRunOpt = False,
     folder: FolderOpt = None,
     max_messages: MaxOpt = None,
+    fetch_all: Annotated[bool, typer.Option("--all", help="Fetch every message in the folder (ignores --max).")] = False,
     threshold: ThresholdOpt = None,
     interactive: Annotated[bool, typer.Option("--interactive", "-i", help="Review each sender before acting.")] = True,
     unsubscribe: Annotated[bool, typer.Option("--unsubscribe/--no-unsubscribe", help="Follow unsubscribe links.")] = True,
@@ -190,10 +191,12 @@ def scan(
 ) -> None:
     """Scan inbox, identify junk senders, and optionally unsubscribe."""
 
-    cfg = load_config(config)
+    cfg, config_path = load_config(config)
     if folder:
         cfg.folder = folder
-    if max_messages:
+    if fetch_all:
+        cfg.max_messages = sys.maxsize
+    elif max_messages:
         cfg.max_messages = max_messages
     if threshold is not None:
         cfg.junk_threshold = threshold
@@ -254,9 +257,13 @@ def scan(
     # 3. Interactive review
     # ------------------------------------------------------------------
     approved_senders: set[str] = set()
+    whitelisted_senders: set[str] = set()
 
     if interactive:
-        console.print("\n[bold]Review each sender:[/bold] (y=keep flagged/act, n=skip, q=quit review)\n")
+        console.print(
+            "\n[bold]Review each sender:[/bold] "
+            "y=act on this sender  n=skip  w=whitelist + delete existing  q=quit\n"
+        )
         for addr, results in grouped.items():
             sample = results[0].message
             example_subject = sample.subject[:60] + ("…" if len(sample.subject) > 60 else "")
@@ -267,12 +274,17 @@ def scan(
                 f"  [bold]{addr}[/bold]  {len(results)} msg(s)  {unsub_tag}\n"
                 f"  e.g. [dim]\"{example_subject}\"[/dim]"
             )
-            choice = Prompt.ask("  Action", choices=["y", "n", "q"], default="y")
+            choice = Prompt.ask("  Action", choices=["y", "n", "w", "q"], default="y")
             if choice == "q":
                 console.print("[dim]Stopping review early.[/dim]")
                 break
-            if choice == "y":
+            elif choice == "y":
                 approved_senders.add(addr)
+            elif choice == "w":
+                whitelisted_senders.add(addr)
+                approved_senders.add(addr)  # still trash existing messages
+                wl_file = save_whitelist_entry(addr, config_path)
+                console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
             console.print()
     else:
         approved_senders = set(grouped.keys())
@@ -347,6 +359,7 @@ def scan(
     summary.add_row("Clean / whitelisted",   f"[green]{len(all_results) - len(junk_results)}[/green]")
     summary.add_row("Senders reviewed",      str(len(grouped)))
     summary.add_row("Senders approved",      str(len(approved_senders)))
+    summary.add_row("Senders whitelisted",   str(len(whitelisted_senders)))
     summary.add_row("Senders skipped",       str(skipped_senders))
     if unsubscribe:
         label = "Unsubscribed (dry run)" if dry_run else "Unsubscribed"
@@ -372,7 +385,7 @@ def senders(
 ) -> None:
     """List junk senders found in the inbox without taking any action."""
 
-    cfg = load_config(config)
+    cfg, _ = load_config(config)
     if folder:
         cfg.folder = folder
     if max_messages:
@@ -420,7 +433,7 @@ def unsubscribe_sender(
 ) -> None:
     """Unsubscribe from a specific sender address."""
 
-    cfg = load_config(config)
+    cfg, _ = load_config(config)
     if folder:
         cfg.folder = folder
     if max_messages:

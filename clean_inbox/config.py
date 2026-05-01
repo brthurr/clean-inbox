@@ -63,9 +63,43 @@ _DEFAULT_CONFIG_PATHS = [
     Path.home() / ".config" / "clean-inbox" / "config.yaml",
 ]
 
+_DEFAULT_WHITELIST_PATHS = [
+    Path("clean-inbox.whitelist"),
+    Path.home() / ".config" / "clean-inbox" / "whitelist.txt",
+]
 
-def load_config(path: str | Path | None = None) -> AppConfig:
-    """Load config from YAML. Returns defaults if no file is found."""
+
+def _whitelist_path(config_path: Path | None) -> Path:
+    """Return the whitelist file path that sits beside the active config."""
+    if config_path:
+        return config_path.parent / "clean-inbox.whitelist"
+    return _DEFAULT_WHITELIST_PATHS[0]
+
+
+def load_whitelist(config_path: Path | None = None) -> list[str]:
+    """Load persisted whitelist entries (one address per line)."""
+    wl_path = _whitelist_path(config_path)
+    if not wl_path.exists():
+        return []
+    return [
+        line.strip().lower()
+        for line in wl_path.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+
+def save_whitelist_entry(address: str, config_path: Path | None = None) -> Path:
+    """Append a single address to the whitelist file. Returns the file path."""
+    wl_path = _whitelist_path(config_path)
+    existing = load_whitelist(config_path)
+    if address.lower() not in existing:
+        with open(wl_path, "a") as fh:
+            fh.write(address.lower() + "\n")
+    return wl_path
+
+
+def load_config(path: str | Path | None = None) -> tuple["AppConfig", Path | None]:
+    """Load config from YAML. Returns (AppConfig, config_path)."""
     if path:
         config_path = Path(path)
     else:
@@ -76,12 +110,17 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         with open(config_path) as fh:
             raw = yaml.safe_load(fh) or {}
 
+    # Merge whitelist from YAML and from the persisted whitelist file
+    yaml_whitelist: list[str] = raw.get("whitelist", [])
+    file_whitelist = load_whitelist(config_path)
+    merged_whitelist = list({*yaml_whitelist, *file_whitelist})
+
     cfg = AppConfig(
         provider=raw.get("provider", "imap"),
         folder=raw.get("folder", "INBOX"),
         max_messages=int(raw.get("max_messages", 500)),
         junk_threshold=int(raw.get("junk_threshold", 30)),
-        whitelist=raw.get("whitelist", []),
+        whitelist=merged_whitelist,
         extra_sender_domains=raw.get("extra_sender_domains", []),
         extra_subject_patterns=raw.get("extra_subject_patterns", []),
         unsubscribe_timeout=int(raw.get("unsubscribe_timeout", 15)),
@@ -122,4 +161,4 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             password=m.get("password", os.environ.get("SMTP_PASSWORD", "")),
         )
 
-    return cfg
+    return cfg, config_path
