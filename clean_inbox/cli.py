@@ -141,13 +141,16 @@ def _build_provider(cfg: AppConfig) -> EmailProvider:
         raise typer.Exit(1)
 
 
-def _build_unsubscriber(cfg: AppConfig) -> Unsubscriber:
+def _build_unsubscriber(cfg: AppConfig, provider: EmailProvider | None = None) -> Unsubscriber:
+    from clean_inbox.providers.gmail import GmailProvider
+    send_fn = provider.send_message if isinstance(provider, GmailProvider) else None
     return Unsubscriber(
         timeout=cfg.unsubscribe_timeout,
         mailto_smtp_host=cfg.mailto.smtp_host or None,
         mailto_smtp_port=cfg.mailto.smtp_port,
         mailto_from=cfg.mailto.from_address or None,
         mailto_password=cfg.mailto.password or None,
+        send_fn=send_fn,
     )
 
 
@@ -336,8 +339,6 @@ def scan(
         extra_sender_domains=cfg.extra_sender_domains,
         extra_subject_patterns=cfg.extra_subject_patterns,
     )
-    unsub = _build_unsubscriber(cfg)
-
     # ------------------------------------------------------------------
     # 1. Fetch & analyze
     # ------------------------------------------------------------------
@@ -345,6 +346,7 @@ def scan(
 
     all_results: list[AnalysisResult] = []
     provider = _build_provider(cfg)
+    unsub = _build_unsubscriber(cfg, provider)
 
     with provider:
         fetch_label = "all" if fetch_all else f"up to {cfg.max_messages}"
@@ -680,7 +682,7 @@ def unsubscribe_sender(
 
     address = address.lower().strip()
     provider = _build_provider(cfg)
-    unsub = _build_unsubscriber(cfg)
+    unsub = _build_unsubscriber(cfg, provider)
 
     with provider:
         with console.status(f"Searching for messages from {address}..."):

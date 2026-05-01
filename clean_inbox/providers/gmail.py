@@ -185,3 +185,13 @@ class GmailProvider(EmailProvider):
     def delete_permanently(self, message: EmailMessage) -> None:
         assert self._service, "Call connect() first"
         self._service.users().messages().delete(userId="me", id=message.raw_id).execute()
+
+    def send_message(self, to: str, subject: str, body: str) -> None:
+        """Send an email via the Gmail API (used for mailto unsubscribe)."""
+        assert self._service, "Call connect() first"
+        import email.mime.text
+        msg = email.mime.text.MIMEText(body)
+        msg["To"] = to
+        msg["Subject"] = subject
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        self._service.users().messages().send(userId="me", body={"raw": raw}).execute()

@@ -8,7 +8,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from email.mime.text import MIMEText
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import requests
 
@@ -98,6 +98,7 @@ class Unsubscriber:
         mailto_from: str | None = None,
         mailto_password: str | None = None,
         user_agent: str = "clean-inbox/0.1 (inbox cleaner)",
+        send_fn: Callable[[str, str, str], None] | None = None,
     ) -> None:
         self.timeout = timeout
         self.mailto_smtp_host = mailto_smtp_host
@@ -105,6 +106,7 @@ class Unsubscriber:
         self.mailto_from = mailto_from
         self.mailto_password = mailto_password
         self.user_agent = user_agent
+        self.send_fn = send_fn
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": self.user_agent})
 
@@ -263,6 +265,27 @@ class Unsubscriber:
                 success=True,
                 dry_run=True,
             )
+
+        # Use provider send_fn (e.g. Gmail API) if available
+        if self.send_fn:
+            try:
+                self.send_fn(to_addr, subject, body)
+                return UnsubscribeResult(
+                    message_id=message.message_id,
+                    sender=message.sender_address,
+                    method=UnsubscribeMethod.MAILTO,
+                    target=to_addr,
+                    success=True,
+                )
+            except Exception as exc:
+                return UnsubscribeResult(
+                    message_id=message.message_id,
+                    sender=message.sender_address,
+                    method=UnsubscribeMethod.MAILTO,
+                    target=to_addr,
+                    success=False,
+                    error=str(exc),
+                )
 
         if not self.mailto_from or not self.mailto_smtp_host:
             return UnsubscribeResult(
