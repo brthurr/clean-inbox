@@ -455,8 +455,7 @@ def scan(
 
     unsub_ok = unsub_failed = 0
     if unsubscribe and unsub_messages:
-        console.print(f"\n[bold]Unsubscribing from {len(unsub_messages)} message(s)...[/bold]")
-        # Deduplicate by sender — only need one unsubscribe per sender
+        # Deduplicate by sender — only one unsubscribe request per sender
         seen_senders: set[str] = set()
         unique_unsub: list[EmailMessage] = []
         for msg in unsub_messages:
@@ -464,6 +463,10 @@ def scan(
                 seen_senders.add(msg.sender_address)
                 unique_unsub.append(msg)
 
+        console.print(
+            f"\n[bold]Sending [cyan]{len(unique_unsub)}[/cyan] unsubscribe request(s) "
+            f"[dim]({len(unsub_messages)} messages matched, one request per sender)[/dim]...[/bold]"
+        )
         unsub_results = unsub.unsubscribe_batch(unique_unsub, dry_run=dry_run)
         _render_unsub_results(unsub_results)
         _log_unsub_results(unsub_results)
