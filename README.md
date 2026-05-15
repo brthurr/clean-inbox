@@ -207,18 +207,28 @@ are flagged. Whitelisted senders are always skipped regardless of score.
 
 ## State files
 
-The app stores persistent state in files alongside your config:
+The app stores persistent state in files alongside your config, scoped by
+both provider and command:
 
 | File | Command | Purpose |
 |---|---|---|
-| `clean-inbox.scan-processed` | `scan` | Senders already reviewed; auto-approved on future runs |
-| `clean-inbox.cleanup-processed` | `cleanup` | Senders already reviewed in cleanup |
-| `clean-inbox.scan-whitelist` | `scan` | Senders never flagged as junk |
-| `clean-inbox.cleanup-whitelist` | `cleanup` | Senders never shown in cleanup |
+| `clean-inbox.{provider}.scan-processed` | `scan` | Senders already reviewed; auto-approved on future runs |
+| `clean-inbox.{provider}.cleanup-processed` | `cleanup` | Senders already reviewed in cleanup |
+| `clean-inbox.{provider}.scan-whitelist` | `scan` | Senders never flagged as junk |
+| `clean-inbox.{provider}.cleanup-whitelist` | `cleanup` | Senders never shown in cleanup |
 
-The whitelist in your YAML config applies to both commands. State files from
-`scan` and `cleanup` are independent — a sender reviewed in `scan` still
-appears in `cleanup` for message deletion.
+Where `{provider}` is `gmail`, `o365`, or `imap`. This means Gmail and O365
+inboxes are tracked completely independently — a sender cleared from one
+will still appear for review in the other.
+
+The whitelist in your YAML config applies globally across all providers and
+commands. State files from `scan` and `cleanup` are independent — a sender
+reviewed in `scan` still appears in `cleanup` for message deletion.
+
+**Fallback chain** for migration: if a provider-scoped file doesn't exist yet,
+the app reads from the previous command-only format (`clean-inbox.scan-processed`)
+and then from the original legacy format (`clean-inbox.processed`), so no
+existing state is lost when upgrading.
 
 Use `--reprocess` on either command to ignore the processed list and re-review
 all senders from scratch.

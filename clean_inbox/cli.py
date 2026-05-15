@@ -58,13 +58,14 @@ one sender at a time.
 
 [bold]State files (stored beside your config):[/bold]
 
-  clean-inbox.scan-processed    senders reviewed by scan (auto-approved next run)
-  clean-inbox.cleanup-processed senders reviewed by cleanup
-  clean-inbox.scan-whitelist    senders never flagged as junk
-  clean-inbox.cleanup-whitelist senders never shown in cleanup
+  clean-inbox.{provider}.scan-processed    senders reviewed by scan
+  clean-inbox.{provider}.cleanup-processed senders reviewed by cleanup
+  clean-inbox.{provider}.scan-whitelist    senders never flagged as junk
+  clean-inbox.{provider}.cleanup-whitelist senders never shown in cleanup
 
-  scan and cleanup track state independently — a sender reviewed in scan
-  still appears in cleanup for message deletion.
+  State is scoped per provider (gmail/o365/imap) so Gmail and O365
+  inboxes are tracked independently. scan and cleanup are also
+  independent — a sender reviewed in scan still appears in cleanup.
 
 [bold]Config file locations (checked in order):[/bold]
 
@@ -403,7 +404,7 @@ def scan(
     # ------------------------------------------------------------------
     # 3. Interactive review
     # ------------------------------------------------------------------
-    processed_senders = set() if reprocess else load_processed(config_path, command="scan")
+    processed_senders = set() if reprocess else load_processed(config_path, command="scan", provider=cfg.provider)
     if reprocess:
         console.print("[dim]--reprocess: ignoring previously processed senders[/dim]")
     approved_senders: set[str] = set()
@@ -446,21 +447,21 @@ def scan(
                 break
             elif choice == "y":
                 approved_senders.add(addr)
-                save_processed_entry(addr, config_path, command="scan")
+                save_processed_entry(addr, config_path, command="scan", provider=cfg.provider)
             elif choice == "c":
                 approved_senders.add(addr)
                 clean_only_senders.add(addr)
-                save_processed_entry(addr, config_path, command="scan")
+                save_processed_entry(addr, config_path, command="scan", provider=cfg.provider)
             elif choice == "w":
                 whitelisted_senders.add(addr)
                 approved_senders.add(addr)
-                wl_file = save_whitelist_entry(addr, config_path, command="scan")
+                wl_file = save_whitelist_entry(addr, config_path, command="scan", provider=cfg.provider)
                 console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
             console.print()
     elif not interactive:
         for addr in new_senders:
             approved_senders.add(addr)
-            save_processed_entry(addr, config_path, command="scan")
+            save_processed_entry(addr, config_path, command="scan", provider=cfg.provider)
 
     if not approved_senders:
         console.print("[dim]No senders approved for action. Done.[/dim]")
@@ -802,8 +803,8 @@ def cleanup(
         console.print(Panel("[yellow bold]DRY RUN MODE — no changes will be made[/yellow bold]", expand=False))
     console.print(f"[dim]Logging to {log_file}[/dim]")
 
-    processed = set() if reprocess else load_processed(config_path, command="cleanup")
-    whitelist = set(cfg.yaml_whitelist) | set(load_whitelist(config_path, command="cleanup"))
+    processed = set() if reprocess else load_processed(config_path, command="cleanup", provider=cfg.provider)
+    whitelist = set(cfg.yaml_whitelist) | set(load_whitelist(config_path, command="cleanup", provider=cfg.provider))
 
     # ------------------------------------------------------------------
     # 1. Fetch
@@ -878,10 +879,10 @@ def cleanup(
             break
         elif choice == "y":
             approved.add(addr)
-            save_processed_entry(addr, config_path, command="cleanup")
+            save_processed_entry(addr, config_path, command="cleanup", provider=cfg.provider)
         elif choice == "w":
             whitelisted_now.add(addr)
-            wl_file = save_whitelist_entry(addr, config_path, command="cleanup")
+            wl_file = save_whitelist_entry(addr, config_path, command="cleanup", provider=cfg.provider)
             console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
         console.print()
 

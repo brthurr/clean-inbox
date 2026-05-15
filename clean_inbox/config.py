@@ -64,74 +64,80 @@ _DEFAULT_CONFIG_PATHS = [
     Path.home() / ".config" / "clean-inbox" / "config.yaml",
 ]
 
-def _whitelist_path(config_path: Path | None, command: str = "scan") -> Path:
-    filename = f"clean-inbox.{command}-whitelist"
+def _whitelist_path(config_path: Path | None, command: str = "scan", provider: str = "") -> Path:
+    filename = f"clean-inbox.{provider}.{command}-whitelist" if provider else f"clean-inbox.{command}-whitelist"
     if config_path:
         return config_path.parent / filename
     return Path(filename)
 
 
-def load_whitelist(config_path: Path | None = None, command: str = "scan") -> list[str]:
-    """Load persisted whitelist entries for the given command."""
-    wl_path = _whitelist_path(config_path, command)
-    # Migrate legacy shared file on first use
-    if not wl_path.exists():
-        legacy = config_path.parent / "clean-inbox.whitelist" if config_path else Path("clean-inbox.whitelist")
-        if legacy.exists():
-            return [
-                line.strip().lower()
-                for line in legacy.read_text().splitlines()
-                if line.strip() and not line.startswith("#")
-            ]
-        return []
-    return [
-        line.strip().lower()
-        for line in wl_path.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    ]
+def load_whitelist(config_path: Path | None = None, command: str = "scan", provider: str = "") -> list[str]:
+    """Load persisted whitelist entries for the given provider+command."""
+    def _read(p: Path) -> list[str]:
+        return [
+            line.strip().lower()
+            for line in p.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+
+    base = config_path.parent if config_path else Path()
+    primary  = _whitelist_path(config_path, command, provider)
+    prev     = _whitelist_path(config_path, command)           # command-only (no provider)
+    legacy   = base / "clean-inbox.whitelist"
+
+    if primary.exists():
+        return _read(primary)
+    if provider and prev.exists():
+        return _read(prev)
+    if legacy.exists():
+        return _read(legacy)
+    return []
 
 
-def save_whitelist_entry(address: str, config_path: Path | None = None, command: str = "scan") -> Path:
-    """Append a single address to the command-specific whitelist file. Returns the file path."""
-    wl_path = _whitelist_path(config_path, command)
-    existing = load_whitelist(config_path, command)
+def save_whitelist_entry(address: str, config_path: Path | None = None, command: str = "scan", provider: str = "") -> Path:
+    """Append an address to the provider+command whitelist file. Returns the file path."""
+    wl_path = _whitelist_path(config_path, command, provider)
+    existing = load_whitelist(config_path, command, provider)
     if address.lower() not in existing:
         with open(wl_path, "a") as fh:
             fh.write(address.lower() + "\n")
     return wl_path
 
 
-def _processed_path(config_path: Path | None, command: str = "scan") -> Path:
-    filename = f"clean-inbox.{command}-processed"
+def _processed_path(config_path: Path | None, command: str = "scan", provider: str = "") -> Path:
+    filename = f"clean-inbox.{provider}.{command}-processed" if provider else f"clean-inbox.{command}-processed"
     if config_path:
         return config_path.parent / filename
     return Path(filename)
 
 
-def load_processed(config_path: Path | None = None, command: str = "scan") -> set[str]:
-    """Load the set of sender addresses previously processed by the given command."""
-    path = _processed_path(config_path, command)
-    # Migrate legacy shared file on first use
-    if not path.exists():
-        legacy = config_path.parent / "clean-inbox.processed" if config_path else Path("clean-inbox.processed")
-        if legacy.exists():
-            return {
-                line.strip().lower()
-                for line in legacy.read_text().splitlines()
-                if line.strip() and not line.startswith("#")
-            }
-        return set()
-    return {
-        line.strip().lower()
-        for line in path.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
-    }
+def load_processed(config_path: Path | None = None, command: str = "scan", provider: str = "") -> set[str]:
+    """Load sender addresses previously processed by the given provider+command."""
+    def _read(p: Path) -> set[str]:
+        return {
+            line.strip().lower()
+            for line in p.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+
+    base = config_path.parent if config_path else Path()
+    primary  = _processed_path(config_path, command, provider)
+    prev     = _processed_path(config_path, command)           # command-only (no provider)
+    legacy   = base / "clean-inbox.processed"
+
+    if primary.exists():
+        return _read(primary)
+    if provider and prev.exists():
+        return _read(prev)
+    if legacy.exists():
+        return _read(legacy)
+    return set()
 
 
-def save_processed_entry(address: str, config_path: Path | None = None, command: str = "scan") -> None:
-    """Append a sender address to the command-specific processed file."""
-    path = _processed_path(config_path, command)
-    existing = load_processed(config_path, command)
+def save_processed_entry(address: str, config_path: Path | None = None, command: str = "scan", provider: str = "") -> None:
+    """Append a sender address to the provider+command processed file."""
+    path = _processed_path(config_path, command, provider)
+    existing = load_processed(config_path, command, provider)
     if address.lower() not in existing:
         with open(path, "a") as fh:
             fh.write(address.lower() + "\n")
@@ -150,7 +156,8 @@ def load_config(path: str | Path | None = None) -> tuple["AppConfig", Path | Non
             raw = yaml.safe_load(fh) or {}
 
     yaml_whitelist: list[str] = raw.get("whitelist") or []
-    scan_file_whitelist = load_whitelist(config_path, command="scan") or []
+    provider_name = raw.get("provider", "imap")
+    scan_file_whitelist = load_whitelist(config_path, command="scan", provider=provider_name) or []
     merged_whitelist = list({*yaml_whitelist, *scan_file_whitelist})
 
     cfg = AppConfig(
