@@ -111,6 +111,10 @@ ThresholdOpt = Annotated[
     Optional[int],
     typer.Option("--threshold", "-t", help="Junk confidence score (0–100). Messages at or above this are flagged. Lower = broader catch. [dim]Default: 30[/dim]"),
 ]
+FilterOpt = Annotated[
+    Optional[str],
+    typer.Option("--filter", "-F", help="Only show senders whose address contains this string (case-insensitive). Useful for targeting a specific domain or sender."),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +303,7 @@ def scan(
     delete: Annotated[bool, typer.Option("--delete", help="Permanently delete all messages from approved senders. Cannot be undone. Prompts for confirmation before acting. [dim]Default: off[/dim]")] = False,
     reprocess: Annotated[bool, typer.Option("--reprocess", help="Show all senders again, ignoring the already-processed list.")] = False,
     min_count: Annotated[int, typer.Option("--min-count", "-k", help="Only review senders with at least this many messages. Lower-volume senders are skipped this run but will reappear later. [dim]Default: 1[/dim]")] = 1,
+    filter: FilterOpt = None,
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to the log file. All actions and failures are appended here. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
@@ -409,7 +414,14 @@ def scan(
     grouped_above = {addr: r for addr, r in grouped.items() if len(r) >= min_count}
     grouped_below = {addr: r for addr, r in grouped.items() if len(r) < min_count}
 
+    # Apply address filter if given
+    filter_term = filter.lower() if filter else None
+    if filter_term:
+        grouped_above = {addr: r for addr, r in grouped_above.items() if filter_term in addr.lower()}
+
     console.print(_render_senders_table(grouped_above))
+    if filter_term:
+        console.print(f"[dim]Showing only senders matching [bold]{filter}[/bold][/dim]")
     if grouped_below:
         console.print(
             f"[dim]{len(grouped_below)} sender(s) with fewer than {min_count} message(s) "
@@ -643,6 +655,7 @@ def senders(
     max_messages: MaxOpt = None,
     threshold: ThresholdOpt = None,
     min_count: Annotated[int, typer.Option("--min-count", help="Only show senders that have at least N messages in the batch. Useful for filtering noise. [dim]Default: 1[/dim]")] = 1,
+    filter: FilterOpt = None,
 ) -> None:
     """\
     Read-only scan: list every identified junk sender without taking any action.
@@ -685,11 +698,17 @@ def senders(
     grouped = {k: v for k, v in grouped.items() if len(v) >= min_count}
     grouped = dict(sorted(grouped.items(), key=lambda kv: -len(kv[1])))
 
+    if filter:
+        filter_term = filter.lower()
+        grouped = {k: v for k, v in grouped.items() if filter_term in k.lower()}
+
     if not grouped:
         console.print("[green]No junk senders found.[/green]")
         return
 
     console.print(_render_senders_table(grouped))
+    if filter:
+        console.print(f"[dim]Showing only senders matching [bold]{filter}[/bold][/dim]")
     console.print(f"\nTotal: [bold]{len(grouped)}[/bold] senders, [bold]{len(junk)}[/bold] messages flagged.")
 
 
@@ -789,6 +808,7 @@ def cleanup(
     trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move chosen senders' messages to trash. [dim]Default: off[/dim]")] = False,
     delete: Annotated[bool, typer.Option("--delete", help="Permanently delete chosen senders' messages. Cannot be undone. [dim]Default: off[/dim]")] = False,
     reprocess: Annotated[bool, typer.Option("--reprocess", help="Show all senders again, ignoring the already-processed list.")] = False,
+    filter: FilterOpt = None,
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to log file. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
@@ -853,6 +873,10 @@ def cleanup(
 
     skipped = len(messages) - sum(len(v) for v in grouped.values())
     grouped = dict(sorted(grouped.items(), key=lambda kv: -len(kv[1])))
+
+    if filter:
+        filter_term = filter.lower()
+        grouped = {addr: msgs for addr, msgs in grouped.items() if filter_term in addr.lower()}
 
     console.print(
         f"  [bold]{len(grouped)}[/bold] sender(s) to review  "
