@@ -278,6 +278,8 @@ def _log_unsub_results(results: list) -> None:
         "    [cyan]clean-inbox scan --trash[/cyan]\n\n"
         "  Scan entire inbox non-interactively and permanently delete:\n"
         "    [cyan]clean-inbox scan --all --no-interactive --delete[/cyan]\n\n"
+        "  Focus first run on high-volume senders only:\n"
+        "    [cyan]clean-inbox scan --trash --min-count 10[/cyan]\n\n"
         "  Re-review all senders, ignoring previous run history:\n"
         "    [cyan]clean-inbox scan --trash --reprocess[/cyan]\n\n"
         "  Use a specific config and lower the sensitivity threshold:\n"
@@ -296,6 +298,7 @@ def scan(
     trash: Annotated[bool, typer.Option("--trash/--no-trash", help="Move all messages from approved senders to the Trash folder. Recoverable; providers typically purge trash after 30 days. [dim]Default: off[/dim]")] = False,
     delete: Annotated[bool, typer.Option("--delete", help="Permanently delete all messages from approved senders. Cannot be undone. Prompts for confirmation before acting. [dim]Default: off[/dim]")] = False,
     reprocess: Annotated[bool, typer.Option("--reprocess", help="Show all senders again, ignoring the already-processed list.")] = False,
+    min_count: Annotated[int, typer.Option("--min-count", "-k", help="Only review senders with at least this many messages. Lower-volume senders are skipped this run but will reappear later. [dim]Default: 1[/dim]")] = 1,
     log_file: Annotated[Path, typer.Option("--log-file", help="Path to the log file. All actions and failures are appended here. [dim]Default: clean-inbox.log[/dim]")] = DEFAULT_LOG_FILE,
 ) -> None:
     """\
@@ -311,7 +314,10 @@ def scan(
          are flagged.
 
       3. [bold]Review[/bold] — displays a table of identified senders (one row per sender).
-         Senders from previous runs are auto-approved and skipped. For new senders:
+         Senders from previous runs are auto-approved and skipped. Use --min-count
+         to focus early runs on high-volume senders only (e.g. --min-count 10).
+         Senders below the threshold are skipped this run and reappear later.
+         For new senders:
 
            [green]y[/green]  unsubscribe + trash/delete (per flags)
            [cyan]c[/cyan]  clean only — trash/delete but skip unsubscribe
@@ -418,12 +424,19 @@ def scan(
             approved_senders.add(addr)
             auto_approved_senders.add(addr)
 
-    new_senders = {addr: results for addr, results in grouped.items() if addr not in processed_senders}
+    new_senders_all = {addr: results for addr, results in grouped.items() if addr not in processed_senders}
+    new_senders = {addr: r for addr, r in new_senders_all.items() if len(r) >= min_count}
+    below_threshold = len(new_senders_all) - len(new_senders)
 
     if auto_approved_senders:
         console.print(
             f"\n[dim]Auto-approving [bold]{len(auto_approved_senders)}[/bold] previously processed "
             f"sender(s) — skipping review for these.[/dim]"
+        )
+    if below_threshold:
+        console.print(
+            f"[dim]Skipping [bold]{below_threshold}[/bold] sender(s) with fewer than "
+            f"{min_count} message(s) — they will reappear on future runs.[/dim]"
         )
 
     if interactive and new_senders:
@@ -576,6 +589,8 @@ def scan(
     summary.add_row("Senders found",          str(len(grouped)))
     summary.add_row("Auto-approved (seen before)", str(len(auto_approved_senders)))
     summary.add_row("New senders reviewed",  str(len(new_senders)))
+    if below_threshold:
+        summary.add_row("Skipped (below --min-count)", str(below_threshold))
     summary.add_row("Senders approved",      str(len(approved_senders)))
     summary.add_row("Senders clean-only",    str(len(clean_only_senders)))
     summary.add_row("Senders whitelisted",   str(len(whitelisted_senders)))
@@ -782,7 +797,7 @@ def cleanup(
 
       [green]y[/green]  trash/delete this sender's messages (per flags)
       [yellow]n[/yellow]  skip — leave this sender's messages alone (default)
-      [cyan]w[/cyan]  whitelist — never show in cleanup again; saves to clean-inbox.cleanup-whitelist
+      [cyan]w[/cyan]  whitelist + delete — never show again and clean existing messages
       [red]q[/red]  stop reviewing (already-approved senders are still acted on)
 
     Use --reprocess to ignore the processed list and re-review all senders.
@@ -864,7 +879,7 @@ def cleanup(
 
     console.print(
         "\n[bold]Review each sender:[/bold] "
-        "y=delete messages  n=skip  w=whitelist (keep messages)  q=quit\n"
+        "y=delete messages  n=skip  w=whitelist + delete messages  q=quit\n"
     )
     for addr, msgs in grouped.items():
         latest = sorted(msgs, key=lambda m: m.date or m.message_id, reverse=True)[0]
@@ -882,6 +897,7 @@ def cleanup(
             save_processed_entry(addr, config_path, command="cleanup", provider=cfg.provider)
         elif choice == "w":
             whitelisted_now.add(addr)
+            approved.add(addr)
             wl_file = save_whitelist_entry(addr, config_path, command="cleanup", provider=cfg.provider)
             console.print(f"  [cyan]Whitelisted[/cyan] — saved to {wl_file}")
         console.print()
