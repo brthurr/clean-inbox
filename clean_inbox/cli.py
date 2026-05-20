@@ -396,7 +396,7 @@ def scan(
         raise typer.Exit(0)
 
     # ------------------------------------------------------------------
-    # 2. Group by sender
+    # 2. Group by sender, apply min_count filter
     # ------------------------------------------------------------------
     grouped: dict[str, list[AnalysisResult]] = defaultdict(list)
     for r in junk_results:
@@ -405,7 +405,16 @@ def scan(
     # Sort by message count descending
     grouped = dict(sorted(grouped.items(), key=lambda kv: -len(kv[1])))
 
-    console.print(_render_senders_table(grouped))
+    # Split into above/below min_count before rendering
+    grouped_above = {addr: r for addr, r in grouped.items() if len(r) >= min_count}
+    grouped_below = {addr: r for addr, r in grouped.items() if len(r) < min_count}
+
+    console.print(_render_senders_table(grouped_above))
+    if grouped_below:
+        console.print(
+            f"[dim]{len(grouped_below)} sender(s) with fewer than {min_count} message(s) "
+            f"not shown — lower --min-count or rerun to review them.[/dim]"
+        )
 
     # ------------------------------------------------------------------
     # 3. Interactive review
@@ -418,15 +427,14 @@ def scan(
     auto_approved_senders: set[str] = set()
     whitelisted_senders: set[str] = set()
 
-    # Auto-approve senders that were approved in a previous run
-    for addr in grouped:
+    # Auto-approve previously processed senders that meet min_count
+    for addr in grouped_above:
         if addr in processed_senders:
             approved_senders.add(addr)
             auto_approved_senders.add(addr)
 
-    new_senders_all = {addr: results for addr, results in grouped.items() if addr not in processed_senders}
-    new_senders = {addr: r for addr, r in new_senders_all.items() if len(r) >= min_count}
-    below_threshold = len(new_senders_all) - len(new_senders)
+    new_senders = {addr: r for addr, r in grouped_above.items() if addr not in processed_senders}
+    below_threshold = len(grouped_below)
 
     if auto_approved_senders:
         console.print(
@@ -575,10 +583,8 @@ def scan(
     # ------------------------------------------------------------------
     # 7. Summary
     # ------------------------------------------------------------------
-    skipped_senders = len(grouped) - len(approved_senders)
+    skipped_senders = len(grouped_above) - len(approved_senders)
     flagged_msgs = sum(len(v) for v in grouped.values())
-    approved_msgs = sum(len(grouped[a]) for a in approved_senders)
-
     summary = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
     summary.add_column(style="dim")
     summary.add_column(justify="right", style="bold")
@@ -587,6 +593,8 @@ def scan(
     summary.add_row("Flagged as junk",       f"[red]{len(junk_results)}[/red]")
     summary.add_row("Clean / whitelisted",   f"[green]{len(all_results) - len(junk_results)}[/green]")
     summary.add_row("Senders found",          str(len(grouped)))
+    if below_threshold:
+        summary.add_row("Senders below --min-count", str(below_threshold))
     summary.add_row("Auto-approved (seen before)", str(len(auto_approved_senders)))
     summary.add_row("New senders reviewed",  str(len(new_senders)))
     if below_threshold:
